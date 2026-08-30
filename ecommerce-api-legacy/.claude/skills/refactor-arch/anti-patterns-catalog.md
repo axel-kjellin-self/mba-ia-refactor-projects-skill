@@ -2,6 +2,23 @@
 
 Este catálogo lista anti-patterns comuns em projetos legados, com sinais de detecção e classificação de severidade.
 
+## Escala de Severidade
+
+Classificação normativa. Em caso de dúvida sobre onde encaixar um finding, decida
+por esta tabela — não pela intuição de gravidade.
+
+| Nível | Critério | Exemplos canônicos |
+|-------|----------|--------------------|
+| **CRITICAL** | Falhas graves de arquitetura ou segurança que impedem o funcionamento correto, expõem dados sensíveis, **ou violam completamente a separação de responsabilidades** | Credenciais hardcoded, SQL Injection, **God Class** (banco + lógica + roteamento no mesmo arquivo) |
+| **HIGH** | Fortes violações de MVC ou SOLID que dificultam muito manutenção e testes | Lógica de negócio pesada dentro de Controllers, acoplamento forte sem Injeção de Dependência, **estado global mutável** |
+| **MEDIUM** | Padronização, duplicação ou gargalos de performance **moderada** | **Queries N+1**, uso inadequado de middlewares, validações ausentes nas rotas |
+| **LOW** | Legibilidade, nomenclatura ruim, magic numbers soltos | Números mágicos, nomes pouco descritivos, documentação ausente |
+
+⚠️ Dois pontos onde a intuição costuma errar:
+- **God Class é CRITICAL**, não HIGH — violar por completo a separação de
+  responsabilidades pesa tanto quanto uma falha de segurança.
+- **N+1 é MEDIUM**, não HIGH — é performance moderada; não quebra a aplicação.
+
 ---
 
 ## CRITICAL SEVERITY
@@ -154,7 +171,9 @@ Este catálogo lista anti-patterns comuns em projetos legados, com sinais de det
 
 **Impacto**: Código impossível de testar em isolamento, difícil manutenção, alto acoplamento.
 
-**Severidade**: HIGH
+**Severidade**: CRITICAL — viola por completo a separação de responsabilidades
+(ver Escala de Severidade no topo). Um arquivo que concentra banco de dados, lógica
+de negócio e roteamento é o caso canônico de CRITICAL arquitetural.
 
 ---
 
@@ -172,6 +191,30 @@ Este catálogo lista anti-patterns comuns em projetos legados, com sinais de det
 **Análise**: Para N itens, executa 1 + N queries ao invés de 1 query com JOIN.
 
 **Impacto**: Degradação severa de performance, sobrecarga do banco de dados.
+
+**Severidade**: MEDIUM — gargalo de performance moderada (ver Escala de Severidade).
+A aplicação continua correta, apenas lenta. Suba para HIGH somente se o endpoint
+afetado for inviável na prática (ex.: milhares de queries por request).
+
+---
+
+### 9.1 Mutable Global State
+
+**Descrição**: Estado compartilhado e mutável no escopo do módulo/aplicação, alterado
+por requisições diferentes.
+
+**Sinais de Detecção**:
+- Python: variável de módulo reatribuída dentro de handler (`cache = {}` no topo,
+  `cache[k] = v` na rota); `global` dentro de função
+- JavaScript: `let`/`var` no escopo do módulo mutado por handler; propriedade de
+  singleton alterada por request (`this.currentUser = ...`)
+- Conexão de banco ou usuário logado guardado em atributo de instância compartilhada
+
+**Impacto**: Vazamento de dados entre requisições concorrentes, bugs não determinísticos,
+impossibilidade de escalar horizontalmente, testes que interferem uns nos outros.
+
+**Recomendação**: Passar estado por parâmetro, usar contexto por request
+(`flask.g`, `AsyncLocalStorage`) ou store externo (Redis).
 
 **Severidade**: HIGH
 
@@ -472,9 +515,9 @@ Este catálogo lista anti-patterns comuns em projetos legados, com sinais de det
 
 | Severidade | Exemplos | Prioridade |
 |------------|----------|------------|
-| CRITICAL (6) | SQL Injection, Hardcoded Secrets, Weak Crypto, Plaintext Passwords, Exposed Secrets, Dangerous Endpoints | Bloqueia deploy |
-| HIGH (7) | Missing Auth, God Class, N+1 Queries, Business Logic in Routes, Callback Hell, Tight Coupling, Poor Error Handling | Fix antes de produção |
-| MEDIUM (8) | Code Duplication, Missing Validation, Race Conditions, Missing Constraints, Debug Mode, Weak Passwords, Deprecated APIs, LIKE Injection | Technical debt |
+| CRITICAL (7) | SQL Injection, Hardcoded Secrets, Weak Crypto, Plaintext Passwords, Exposed Secrets, Dangerous Endpoints, **God Class** | Bloqueia deploy |
+| HIGH (7) | Missing Auth, Business Logic in Routes, Callback Hell, Tight Coupling, Poor Error Handling, **Mutable Global State** | Fix antes de produção |
+| MEDIUM (9) | Code Duplication, Missing Validation, Race Conditions, Missing Constraints, Debug Mode, Weak Passwords, Deprecated APIs, LIKE Injection, **N+1 Queries** | Technical debt |
 | LOW (4) | Magic Numbers, Poor Naming, Missing Docs, Dead Code | Melhoria contínua |
 
-**Total**: 25 anti-patterns catalogados
+**Total**: 26 anti-patterns catalogados

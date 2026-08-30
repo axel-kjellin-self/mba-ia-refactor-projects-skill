@@ -84,10 +84,31 @@ Identificar todos os anti-patterns, code smells e problemas de segurança, geran
    - Ordene por severidade (CRITICAL → LOW)
    - Inclua contagem total por severidade
 
-4. **Exibir Relatório e Pausar**
+4. **Salvar o Relatório em `reports/`** — entregável obrigatório
+
+   Imprimir no chat **não basta**: o relatório precisa ficar versionado no repositório.
+
+   - Caminho: `<raiz-do-repositório>/reports/audit-project-<N>.md`
+   - Numeração fixa: `1` = code-smells-project · `2` = ecommerce-api-legacy ·
+     `3` = task-manager-api
+   - ⚠️ A skill roda de **dentro** do projeto; `reports/` fica um nível **acima**.
+     Confirme a raiz antes de escrever (ex.: `git rev-parse --show-toplevel`).
+   - Crie o diretório se não existir.
+   - Se o arquivo já existir, **sobrescreva**: vale sempre a execução mais recente.
+     Um relatório antigo apontando arquivos que já não existem é pior que nenhum.
+   - O conteúdo salvo deve ser **idêntico** ao impresso — mesmos findings, mesmas
+     linhas, mesma contagem.
+
+5. **Exibir Relatório e Pausar**
    - Imprima o relatório completo
+   - Informe onde ele foi salvo
    - **IMPORTANTE**: Pergunte ao usuário se deseja prosseguir para Fase 3
    - Aguarde confirmação explícita (y/n) antes de modificar qualquer arquivo
+
+   ```
+   Phase 2 complete. Report saved to reports/audit-project-<N>.md
+   Proceed with refactoring (Phase 3)? [y/n]
+   ```
 
 ### Formato do Relatório
 
@@ -304,6 +325,28 @@ Esta fase só deve ser executada após aprovação explícita do usuário na Fas
      Pendentes: <liste o que ficou e por quê, ou "nenhum">
    ================================
    ```
+
+10. **Registrar a Comprovação no README do Repositório**
+
+    O relatório da Fase 2 prova o que estava **errado**. O README precisa provar o que
+    ficou **certo** — é a evidência de conclusão. Sem isso, a única prova de que a
+    aplicação roda depois da refatoração é a palavra do agente.
+
+    Na raiz do repositório, atualize o `README.md` acrescentando, para este projeto:
+
+    - **Antes/depois da estrutura** de diretórios
+    - **Checklist de validação preenchido**, específico deste projeto (não um genérico
+      compartilhado entre os três)
+    - **Logs reais** da aplicação rodando após a refatoração: saída do boot e os
+      códigos HTTP observados nos `curl` do passo 8, copiados literalmente
+    - **Contagem de findings** por severidade, igual à do relatório da Fase 2
+    - **Link** para `reports/audit-project-<N>.md`
+
+    Regras:
+    - Números no README **devem bater** com os do relatório salvo. Se divergirem, o
+      relatório é a fonte da verdade — corrija o README, não o relatório.
+    - Não descreva como resolvido o que ficou pendente; liste o pendente.
+    - Preserve as seções já existentes de outros projetos: **acrescente, não substitua**.
 
 ---
 
