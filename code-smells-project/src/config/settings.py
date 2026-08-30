@@ -1,91 +1,75 @@
-"""Configuração da aplicação, carregada exclusivamente de variáveis de ambiente.
+"""Configuração da aplicação carregada a partir do ambiente.
 
-Nenhum secret é definido em código: a SECRET_KEY é obrigatória em produção e a
-ausência dela interrompe o boot em vez de cair num valor default inseguro.
+Substitui os valores hardcoded que antes viviam em ``app.py`` (SECRET_KEY,
+DEBUG) e em ``database.py`` (caminho do banco).
 """
 
 import os
-import secrets
-from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
 
-class ConfigError(RuntimeError):
-    """Configuração ausente ou inválida — impede o boot da aplicação."""
-
-
 def _env_bool(name: str, default: bool = False) -> bool:
-    valor = os.environ.get(name)
-    if valor is None:
-        return default
-    return valor.strip().lower() in {"1", "true", "yes", "on"}
+    return os.getenv(name, str(default)).strip().lower() in ("1", "true", "yes", "on")
 
 
 def _env_int(name: str, default: int) -> int:
-    valor = os.environ.get(name)
-    if valor is None or valor.strip() == "":
-        return default
     try:
-        return int(valor)
-    except ValueError as exc:
-        raise ConfigError(f"{name} deve ser um número inteiro, recebido: {valor!r}") from exc
+        return int(os.getenv(name, default))
+    except ValueError:
+        return default
 
 
-@dataclass(frozen=True)
-class Settings:
-    secret_key: str
-    env: str
-    debug: bool
-    host: str
-    port: int
-    database_path: str
-    jwt_expiration_minutes: int
-    cors_origins: list = field(default_factory=list)
-    log_level: str = "INFO"
-    seed_admin_email: str = ""
-    seed_admin_password: str = ""
+class Config:
+    """Configuração base. Valores sensíveis vêm exclusivamente do ambiente."""
 
-    @property
-    def is_production(self) -> bool:
-        return self.env == "production"
+    ENV: str = os.getenv("FLASK_ENV", "development")
+    DEBUG: bool = _env_bool("DEBUG", False)
 
+    SECRET_KEY: str | None = os.getenv("SECRET_KEY")
 
-def load_settings() -> Settings:
-    """Monta as Settings a partir do ambiente, validando o que é crítico."""
-    env = os.environ.get("FLASK_ENV", "development").strip().lower()
-    is_production = env == "production"
+    DATABASE_PATH: str = os.getenv("DATABASE_PATH", "loja.db")
 
-    secret_key = os.environ.get("SECRET_KEY", "").strip()
-    if not secret_key:
-        if is_production:
-            raise ConfigError(
-                "SECRET_KEY é obrigatória em produção. Defina a variável de ambiente "
-                "(veja .env.example) antes de iniciar a aplicação."
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRES_SECONDS: int = _env_int("JWT_EXPIRES_SECONDS", 3600)
+
+    # Origens permitidas para CORS. Antes era liberado para qualquer origem.
+    CORS_ORIGINS: list[str] = [
+        origin.strip()
+        for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+        if origin.strip()
+    ]
+
+    HOST: str = os.getenv("HOST", "127.0.0.1")
+    PORT: int = _env_int("PORT", 5000)
+
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+
+    # Habilita o seed de dados de exemplo apenas fora de produção.
+    SEED_DATA: bool = _env_bool("SEED_DATA", True)
+    SEED_ADMIN_PASSWORD: str | None = os.getenv("SEED_ADMIN_PASSWORD")
+
+    @classmethod
+    def validate(cls) -> None:
+        """Falha o boot se configuração obrigatória estiver ausente.
+
+        É preferível não subir a subir com uma chave default previsível.
+        """
+        missing = [name for name in ("SECRET_KEY",) if not getattr(cls, name)]
+        if missing:
+            raise RuntimeError(
+                "Configuração obrigatória ausente: "
+                + ", ".join(missing)
+                + ". Copie .env.example para .env e preencha os valores."
             )
-        # Em desenvolvimento geramos uma chave efêmera: os tokens deixam de valer a
-        # cada restart, o que é preferível a um secret fixo versionado no código.
-        secret_key = secrets.token_urlsafe(48)
 
-    debug = _env_bool("DEBUG", default=False)
-    if is_production and debug:
-        raise ConfigError("DEBUG não pode estar habilitado em produção.")
+        if len(cls.SECRET_KEY) < 32:
+            raise RuntimeError("SECRET_KEY deve ter no mínimo 32 caracteres.")
 
-    origens = os.environ.get("CORS_ORIGINS", "").strip()
-    cors_origins = [o.strip() for o in origens.split(",") if o.strip()] or ["*"]
-
-    return Settings(
-        secret_key=secret_key,
-        env=env,
-        debug=debug,
-        host=os.environ.get("HOST", "127.0.0.1"),
-        port=_env_int("PORT", 5000),
-        database_path=os.environ.get("DATABASE_PATH", "loja.db"),
-        jwt_expiration_minutes=_env_int("JWT_EXPIRATION_MINUTES", 60),
-        cors_origins=cors_origins,
-        log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
-        seed_admin_email=os.environ.get("SEED_ADMIN_EMAIL", "").strip(),
-        seed_admin_password=os.environ.get("SEED_ADMIN_PASSWORD", "").strip(),
-    )
+        if cls.ENV == "production":
+            if cls.DEBUG:
+                raise RuntimeError("DEBUG não pode estar habilitado em produção.")
+            if "*" in cls.CORS_ORIGINS:
+                raise RuntimeError("CORS_ORIGINS não pode ser '*' em produção.")

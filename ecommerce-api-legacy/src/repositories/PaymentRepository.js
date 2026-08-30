@@ -1,64 +1,20 @@
-const database = require('../config/database');
-const Payment = require('../models/Payment');
-
-/**
- * Payment Repository
- * Handles database operations for payments
- */
+/** Acesso a dados da entidade `payments`. */
 class PaymentRepository {
-    /**
-     * Find payment by ID
-     * @param {number} paymentId
-     * @returns {Promise<Payment|null>}
-     */
-    async findById(paymentId) {
-        const row = await database.get('SELECT * FROM payments WHERE id = ?', [paymentId]);
-        return row ? new Payment(row) : null;
+    constructor(db) {
+        this.db = db;
     }
 
-    /**
-     * Find payment by enrollment ID
-     * @param {number} enrollmentId
-     * @returns {Promise<Payment|null>}
-     */
-    async findByEnrollmentId(enrollmentId) {
-        const row = await database.get(
-            'SELECT * FROM payments WHERE enrollment_id = ?',
-            [enrollmentId]
-        );
-        return row ? new Payment(row) : null;
-    }
-
-    /**
-     * Create a new payment
-     * @param {Object} paymentData - { enrollment_id, amount, status }
-     * @returns {Promise<Payment>}
-     */
-    async create(paymentData) {
-        const result = await database.run(
+    async create({ enrollmentId, amount, status }, executor = this.db) {
+        const { lastID } = await executor.run(
             'INSERT INTO payments (enrollment_id, amount, status) VALUES (?, ?, ?)',
-            [paymentData.enrollment_id, paymentData.amount, paymentData.status]
+            [enrollmentId, amount, status]
         );
-
-        return this.findById(result.lastID);
+        return lastID;
     }
 
-    /**
-     * Find all payments for a user
-     * @param {number} userId
-     * @returns {Promise<Payment[]>}
-     */
-    async findByUserId(userId) {
-        const query = `
-            SELECT p.*
-            FROM payments p
-            JOIN enrollments e ON p.enrollment_id = e.id
-            WHERE e.user_id = ?
-        `;
-
-        const rows = await database.all(query, [userId]);
-        return rows.map(row => new Payment(row));
+    findByEnrollmentId(enrollmentId, executor = this.db) {
+        return executor.get('SELECT * FROM payments WHERE enrollment_id = ?', [enrollmentId]);
     }
 }
 
-module.exports = new PaymentRepository();
+module.exports = PaymentRepository;

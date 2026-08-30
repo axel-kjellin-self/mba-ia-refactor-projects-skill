@@ -1,128 +1,185 @@
-"""Primitivas de validação reutilizáveis.
+"""Primitivas de validação de entrada.
 
-Substituem os blocos de ``if`` ad-hoc espalhados pelos controllers legados, que
-divergiam entre endpoints e deixavam passar erros de tipo (transformados em 500).
+Cada função valida tipo *antes* de faixa — o código original comparava
+``preco < 0`` sem checar o tipo, o que transformava ``{"preco": "abc"}`` num
+TypeError capturado como erro 500.
 """
 
 import re
+from typing import Any
 
 from src.utils.errors import ValidationError
 
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[a-zA-Z]{2,}$")
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$")
 
 
-def exigir_dict(dados, nome: str = "corpo da requisição") -> dict:
-    if not isinstance(dados, dict) or not dados:
-        raise ValidationError(f"O {nome} deve ser um objeto JSON não vazio")
+def exigir_objeto(dados: Any) -> dict[str, Any]:
+    """Garante que o corpo do request é um objeto JSON."""
+    if not isinstance(dados, dict):
+        raise ValidationError("Corpo da requisição deve ser um objeto JSON.")
     return dados
 
 
 def texto(
-    dados: dict,
+    dados: dict[str, Any],
     campo: str,
     *,
     obrigatorio: bool = True,
     minimo: int = 0,
-    maximo: int | None = None,
-    padrao: str = "",
+    maximo: int = 255,
+    padrao: str | None = None,
 ) -> str:
-    if campo not in dados or dados[campo] is None:
-        if obrigatorio:
-            raise ValidationError(f"'{campo}' é obrigatório")
-        return padrao
+    valor = dados.get(campo, padrao)
 
-    valor = dados[campo]
+    if valor is None or (isinstance(valor, str) and not valor.strip()):
+        if obrigatorio:
+            raise ValidationError(f"'{campo}' é obrigatório.", {campo: "obrigatório"})
+        return padrao if padrao is not None else ""
+
     if not isinstance(valor, str):
-        raise ValidationError(f"'{campo}' deve ser texto")
+        raise ValidationError(f"'{campo}' deve ser texto.", {campo: "tipo inválido"})
 
     valor = valor.strip()
-    if obrigatorio and not valor:
-        raise ValidationError(f"'{campo}' é obrigatório")
-    if valor and len(valor) < minimo:
-        raise ValidationError(f"'{campo}' deve ter ao menos {minimo} caracteres")
-    if maximo is not None and len(valor) > maximo:
-        raise ValidationError(f"'{campo}' deve ter no máximo {maximo} caracteres")
+    if len(valor) < minimo:
+        raise ValidationError(
+            f"'{campo}' deve ter no mínimo {minimo} caracteres.", {campo: "muito curto"}
+        )
+    if len(valor) > maximo:
+        raise ValidationError(
+            f"'{campo}' deve ter no máximo {maximo} caracteres.", {campo: "muito longo"}
+        )
     return valor
 
 
 def numero(
-    dados: dict,
+    dados: dict[str, Any],
     campo: str,
     *,
     obrigatorio: bool = True,
     minimo: float | None = None,
     maximo: float | None = None,
     padrao: float | None = None,
-) -> float | None:
-    if campo not in dados or dados[campo] is None:
+) -> float:
+    valor = dados.get(campo, padrao)
+
+    if valor is None:
         if obrigatorio:
-            raise ValidationError(f"'{campo}' é obrigatório")
+            raise ValidationError(f"'{campo}' é obrigatório.", {campo: "obrigatório"})
         return padrao
 
-    valor = dados[campo]
-    # bool é subclasse de int em Python: True passaria como 1 sem esta checagem.
+    # bool é subclasse de int em Python; aceitar True como número seria um bug.
     if isinstance(valor, bool) or not isinstance(valor, (int, float)):
-        raise ValidationError(f"'{campo}' deve ser numérico")
+        raise ValidationError(f"'{campo}' deve ser numérico.", {campo: "tipo inválido"})
+
     return _checar_faixa(float(valor), campo, minimo, maximo)
 
 
 def inteiro(
-    dados: dict,
+    dados: dict[str, Any],
     campo: str,
     *,
     obrigatorio: bool = True,
     minimo: int | None = None,
     maximo: int | None = None,
     padrao: int | None = None,
-) -> int | None:
-    if campo not in dados or dados[campo] is None:
+) -> int:
+    valor = dados.get(campo, padrao)
+
+    if valor is None:
         if obrigatorio:
-            raise ValidationError(f"'{campo}' é obrigatório")
+            raise ValidationError(f"'{campo}' é obrigatório.", {campo: "obrigatório"})
         return padrao
 
-    valor = dados[campo]
     if isinstance(valor, bool) or not isinstance(valor, int):
-        raise ValidationError(f"'{campo}' deve ser um número inteiro")
+        raise ValidationError(f"'{campo}' deve ser um inteiro.", {campo: "tipo inválido"})
+
     return int(_checar_faixa(valor, campo, minimo, maximo))
 
 
-def _checar_faixa(valor: float, campo: str, minimo, maximo) -> float:
-    if minimo is not None and valor < minimo:
-        raise ValidationError(f"'{campo}' deve ser maior ou igual a {minimo}")
-    if maximo is not None and valor > maximo:
-        raise ValidationError(f"'{campo}' deve ser menor ou igual a {maximo}")
-    return valor
+def escolha(
+    dados: dict[str, Any],
+    campo: str,
+    opcoes: tuple[str, ...],
+    *,
+    obrigatorio: bool = True,
+    padrao: str | None = None,
+) -> str:
+    valor = dados.get(campo, padrao)
 
+    if valor is None:
+        if obrigatorio:
+            raise ValidationError(f"'{campo}' é obrigatório.", {campo: "obrigatório"})
+        return padrao
 
-def opcao(valor: str, campo: str, opcoes) -> str:
     if valor not in opcoes:
-        raise ValidationError(f"'{campo}' inválido. Valores aceitos: {', '.join(opcoes)}")
+        raise ValidationError(
+            f"'{campo}' inválido. Valores aceitos: {', '.join(opcoes)}.",
+            {campo: "valor não permitido"},
+        )
     return valor
 
 
-def email(dados: dict, campo: str = "email") -> str:
-    valor = texto(dados, campo, minimo=3, maximo=254).lower()
+def email(dados: dict[str, Any], campo: str, *, maximo: int = 254) -> str:
+    valor = texto(dados, campo, minimo=3, maximo=maximo).lower()
     if not _EMAIL_RE.match(valor):
-        raise ValidationError("Email em formato inválido")
+        raise ValidationError("Formato de e-mail inválido.", {campo: "formato inválido"})
     return valor
 
 
-def numero_de_query(valor: str | None, campo: str, minimo: float | None = None):
-    """Converte um parâmetro de query string, devolvendo 400 (e não 500) se inválido."""
-    if valor is None or valor.strip() == "":
+def lista(
+    dados: dict[str, Any], campo: str, *, minimo: int = 1, maximo: int = 100
+) -> list[Any]:
+    valor = dados.get(campo)
+
+    if not isinstance(valor, list):
+        raise ValidationError(f"'{campo}' deve ser uma lista.", {campo: "tipo inválido"})
+    if len(valor) < minimo:
+        raise ValidationError(
+            f"'{campo}' deve conter ao menos {minimo} item(ns).", {campo: "muito curta"}
+        )
+    if len(valor) > maximo:
+        raise ValidationError(
+            f"'{campo}' deve conter no máximo {maximo} itens.", {campo: "muito longa"}
+        )
+    return valor
+
+
+def numero_query(valor: str | None, campo: str, *, minimo: float | None = None) -> float | None:
+    """Converte um parâmetro de query string, sinalizando 400 em vez de 500."""
+    if valor is None or valor == "":
         return None
     try:
         convertido = float(valor)
-    except ValueError as exc:
-        raise ValidationError(f"'{campo}' deve ser numérico") from exc
+    except ValueError:
+        raise ValidationError(
+            f"'{campo}' deve ser numérico.", {campo: "tipo inválido"}
+        ) from None
     return _checar_faixa(convertido, campo, minimo, None)
 
 
-def inteiro_de_query(valor: str | None, campo: str, padrao: int, minimo: int, maximo: int) -> int:
-    if valor is None or valor.strip() == "":
+def inteiro_query(
+    valor: str | None, campo: str, *, padrao: int, minimo: int, maximo: int
+) -> int:
+    if valor is None or valor == "":
         return padrao
     try:
         convertido = int(valor)
-    except ValueError as exc:
-        raise ValidationError(f"'{campo}' deve ser um número inteiro") from exc
+    except ValueError:
+        raise ValidationError(
+            f"'{campo}' deve ser um inteiro.", {campo: "tipo inválido"}
+        ) from None
     return int(_checar_faixa(convertido, campo, minimo, maximo))
+
+
+def _checar_faixa(
+    valor: float, campo: str, minimo: float | None, maximo: float | None
+) -> float:
+    if minimo is not None and valor < minimo:
+        raise ValidationError(
+            f"'{campo}' deve ser maior ou igual a {minimo}.", {campo: "abaixo do mínimo"}
+        )
+    if maximo is not None and valor > maximo:
+        raise ValidationError(
+            f"'{campo}' deve ser menor ou igual a {maximo}.", {campo: "acima do máximo"}
+        )
+    return valor

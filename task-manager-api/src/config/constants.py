@@ -1,56 +1,69 @@
-# Validation Constants
-class ValidationRules:
-    # Task
-    MIN_TITLE_LENGTH = 3
-    MAX_TITLE_LENGTH = 200
-    MIN_PRIORITY = 1
-    MAX_PRIORITY = 5
+"""Constantes de domínio — fonte única de verdade.
 
-    # User
-    MIN_PASSWORD_LENGTH = 8  # Increased from 4
-    MIN_NAME_LENGTH = 2
-    MAX_NAME_LENGTH = 100
-    MAX_EMAIL_LENGTH = 150
-
-    # Category
-    MAX_CATEGORY_NAME_LENGTH = 100
-    MAX_CATEGORY_DESC_LENGTH = 300
-
-    # Valid Values
-    VALID_TASK_STATUSES = ['pending', 'in_progress', 'done', 'cancelled']
-    VALID_USER_ROLES = ['user', 'admin', 'manager']
+Antes estas regras estavam espalhadas como literais em 12+ pontos das rotas
+(finding LOW: Magic Numbers) e duplicadas em `utils/helpers.py`, onde eram
+definidas mas nunca importadas.
+"""
+from enum import StrEnum
 
 
-# Default Values
-class Defaults:
-    TASK_STATUS = 'pending'
-    TASK_PRIORITY = 3
-    USER_ROLE = 'user'
-    USER_ACTIVE = True
-    CATEGORY_COLOR = '#000000'
+class TaskStatus(StrEnum):
+    PENDING = 'pending'
+    IN_PROGRESS = 'in_progress'
+    DONE = 'done'
+    CANCELLED = 'cancelled'
+
+    @classmethod
+    def values(cls) -> list[str]:
+        return [status.value for status in cls]
+
+    @classmethod
+    def closed(cls) -> set[str]:
+        """Status que encerram a task — não podem ficar atrasadas."""
+        return {cls.DONE.value, cls.CANCELLED.value}
 
 
-# Date Formats
-class DateFormats:
-    ISO_DATE = '%Y-%m-%d'
-    ISO_DATETIME = '%Y-%m-%d %H:%M:%S'
-    DISPLAY_DATE = '%d/%m/%Y'
+class UserRole(StrEnum):
+    USER = 'user'
+    ADMIN = 'admin'
+    MANAGER = 'manager'
+
+    @classmethod
+    def values(cls) -> list[str]:
+        return [role.value for role in cls]
 
 
-# Priority Labels
-PRIORITY_LABELS = {
-    1: 'Critical',
-    2: 'High',
-    3: 'Medium',
-    4: 'Low',
-    5: 'Minimal'
+# Task
+MIN_TITLE_LENGTH = 3
+MAX_TITLE_LENGTH = 200
+MAX_DESCRIPTION_LENGTH = 5000
+MAX_TAGS_LENGTH = 500
+MIN_PRIORITY = 1
+MAX_PRIORITY = 5
+DEFAULT_PRIORITY = 3
+HIGH_PRIORITY_THRESHOLD = 2  # priority <= 2 é considerada alta
+
+PRIORITY_LABELS: dict[int, str] = {
+    1: 'critical',
+    2: 'high',
+    3: 'medium',
+    4: 'low',
+    5: 'minimal',
 }
 
+# User
+MIN_PASSWORD_LENGTH = 12
+MAX_NAME_LENGTH = 100
+MAX_EMAIL_LENGTH = 150
 
-# Status Labels
-STATUS_LABELS = {
-    'pending': 'Pending',
-    'in_progress': 'In Progress',
-    'done': 'Done',
-    'cancelled': 'Cancelled'
-}
+# Category
+MAX_CATEGORY_NAME_LENGTH = 100
+MAX_CATEGORY_DESCRIPTION_LENGTH = 300
+DEFAULT_COLOR = '#000000'
+HEX_COLOR_PATTERN = r'^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$'
+
+# Reports
+RECENT_ACTIVITY_DAYS = 7
+
+# Datas
+DATE_FORMAT = '%Y-%m-%d'

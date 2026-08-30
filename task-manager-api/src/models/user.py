@@ -1,52 +1,34 @@
-from src.config.database import db
+"""Model User — apenas definição de entidade e hashing de senha."""
 from datetime import datetime
-from werkzeug.security import generate_password_hash, check_password_hash
+
+from werkzeug.security import check_password_hash, generate_password_hash
+
+from src.config.constants import MAX_EMAIL_LENGTH, MAX_NAME_LENGTH, UserRole
+from src.config.database import db
 
 
 class User(db.Model):
     __tablename__ = 'users'
 
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    email = db.Column(db.String(150), unique=True, nullable=False, index=True)
-    password = db.Column(db.String(255), nullable=False)
-    role = db.Column(db.String(50), default='user')
-    active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    name = db.Column(db.String(MAX_NAME_LENGTH), nullable=False)
+    email = db.Column(db.String(MAX_EMAIL_LENGTH), unique=True, nullable=False, index=True)
+    # Armazena o hash (scrypt, default do Werkzeug), nunca a senha em claro.
+    password_hash = db.Column('password', db.String(255), nullable=False)
+    role = db.Column(db.String(50), nullable=False, default=UserRole.USER.value)
+    active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
-    # Relationships with eager loading
-    tasks = db.relationship('Task', backref='user', lazy='dynamic')
+    def set_password(self, raw_password: str) -> None:
+        """Gera hash com salt via Werkzeug (substitui o MD5 sem salt anterior)."""
+        self.password_hash = generate_password_hash(raw_password)
 
-    def set_password(self, pwd):
-        """Hash password using bcrypt (via werkzeug)"""
-        self.password = generate_password_hash(pwd, method='pbkdf2:sha256')
+    def check_password(self, raw_password: str) -> bool:
+        return check_password_hash(self.password_hash, raw_password)
 
-    def check_password(self, pwd):
-        """Verify password against hash"""
-        return check_password_hash(self.password, pwd)
+    @property
+    def is_admin(self) -> bool:
+        return self.role == UserRole.ADMIN.value
 
-    def is_admin(self):
-        """Check if user is admin"""
-        return self.role == 'admin'
-
-    def to_dict(self, include_tasks=False):
-        """
-        Serialize user to dictionary
-        NEVER includes password hash
-        """
-        data = {
-            'id': self.id,
-            'name': self.name,
-            'email': self.email,
-            'role': self.role,
-            'active': self.active,
-            'created_at': self.created_at.isoformat() if self.created_at else None
-        }
-
-        if include_tasks:
-            data['tasks'] = [task.to_dict() for task in self.tasks]
-            data['task_count'] = self.tasks.count()
-        else:
-            data['task_count'] = self.tasks.count()
-
-        return data
+    def __repr__(self) -> str:
+        return f'<User {self.id} {self.email}>'

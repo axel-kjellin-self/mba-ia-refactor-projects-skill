@@ -1,20 +1,33 @@
+"""Rotas de usuários — apenas URL → controller, com os middlewares aplicados."""
 from flask import Blueprint
+
+from src.config.constants import UserRole
 from src.controllers.user_controller import UserController
-from src.middlewares.auth import require_auth, require_owner_or_admin
+from src.middlewares.auth import require_auth, require_role
 
-# Create blueprint
-user_bp = Blueprint('users', __name__)
+user_bp = Blueprint('users', __name__, url_prefix='/users')
+controller = UserController()
 
-# Instantiate controller
-user_controller = UserController()
-
-# Public routes
-user_bp.route('/login', methods=['POST'])(user_controller.login)
-
-# User management routes
-user_bp.route('/users', methods=['GET'])(user_controller.get_all)
-user_bp.route('/users/<int:user_id>', methods=['GET'])(user_controller.get_by_id)
-user_bp.route('/users', methods=['POST'])(user_controller.create)
-user_bp.route('/users/<int:user_id>', methods=['PUT'])(user_controller.update)
-user_bp.route('/users/<int:user_id>', methods=['DELETE'])(user_controller.delete)
-user_bp.route('/users/<int:user_id>/tasks', methods=['GET'])(user_controller.get_user_tasks)
+user_bp.add_url_rule(
+    '',
+    'list',
+    require_role(UserRole.ADMIN.value, UserRole.MANAGER.value)(controller.list),
+    methods=['GET'],
+)
+user_bp.add_url_rule(
+    '/<int:user_id>', 'get', require_auth(controller.get), methods=['GET']
+)
+# Registro público — único endpoint de escrita sem autenticação.
+user_bp.add_url_rule('', 'create', controller.create, methods=['POST'])
+user_bp.add_url_rule(
+    '/<int:user_id>', 'update', require_auth(controller.update), methods=['PUT']
+)
+user_bp.add_url_rule(
+    '/<int:user_id>',
+    'delete',
+    require_role(UserRole.ADMIN.value)(controller.delete),
+    methods=['DELETE'],
+)
+user_bp.add_url_rule(
+    '/<int:user_id>/tasks', 'list_tasks', require_auth(controller.list_tasks), methods=['GET']
+)

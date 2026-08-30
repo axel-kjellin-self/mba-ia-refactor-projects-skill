@@ -1,68 +1,77 @@
-"""Criação do schema e seed inicial.
+"""Definição do schema do banco e carga de dados de exemplo.
 
-No código legado o schema era criado como efeito colateral do ``get_db()``, o que
-misturava infraestrutura com acesso a dados. Aqui a inicialização é explícita:
-``flask init-db`` ou ``init_database(app)`` no boot em desenvolvimento.
+Antes esse código rodava como efeito colateral de ``get_db()``, em toda
+inicialização de conexão. Agora é uma etapa explícita de bootstrap.
+
+Diferenças em relação ao schema original: colunas obrigatórias marcadas como
+NOT NULL, e-mail único, foreign keys declaradas, CHECKs de domínio e índices
+nas colunas usadas em junção.
 """
 
 import logging
+import sqlite3
 
-from src.config.constants import TIPO_ADMIN
-from src.config.database import get_db
+from src.config.constants import Categoria, StatusPedido, TipoUsuario
+from src.config.settings import Config
 from src.utils.security import hash_senha
 
 logger = logging.getLogger(__name__)
 
-# FOREIGN KEYs, UNIQUE e NOT NULL ausentes no schema legado; índices adicionados
-# nas colunas usadas em filtro/join.
-_DDL = (
-    """
+_CATEGORIAS_SQL = ", ".join(f"'{c}'" for c in Categoria.VALIDAS)
+_STATUS_SQL = ", ".join(f"'{s}'" for s in StatusPedido.VALIDOS)
+_TIPOS_SQL = ", ".join(f"'{t}'" for t in TipoUsuario.VALIDOS)
+
+DDL: tuple[str, ...] = (
+    f"""
     CREATE TABLE IF NOT EXISTS produtos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT NOT NULL,
-        descricao TEXT NOT NULL DEFAULT '',
-        preco REAL NOT NULL CHECK (preco >= 0),
-        estoque INTEGER NOT NULL CHECK (estoque >= 0),
-        categoria TEXT NOT NULL,
-        ativo INTEGER NOT NULL DEFAULT 1,
-        criado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome       TEXT    NOT NULL,
+        descricao  TEXT    NOT NULL DEFAULT '',
+        preco      REAL    NOT NULL CHECK (preco >= 0),
+        estoque    INTEGER NOT NULL DEFAULT 0 CHECK (estoque >= 0),
+        categoria  TEXT    NOT NULL CHECK (categoria IN ({_CATEGORIAS_SQL})),
+        ativo      INTEGER NOT NULL DEFAULT 1 CHECK (ativo IN (0, 1)),
+        criado_em  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
-    """
+    f"""
     CREATE TABLE IF NOT EXISTS usuarios (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT NOT NULL,
-        email TEXT NOT NULL UNIQUE,
-        senha_hash TEXT NOT NULL,
-        tipo TEXT NOT NULL DEFAULT 'cliente',
-        criado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome       TEXT    NOT NULL,
+        email      TEXT    NOT NULL UNIQUE,
+        senha_hash TEXT    NOT NULL,
+        tipo       TEXT    NOT NULL DEFAULT '{TipoUsuario.CLIENTE}'
+                           CHECK (tipo IN ({_TIPOS_SQL})),
+        criado_em  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
-    """
+    f"""
     CREATE TABLE IF NOT EXISTS pedidos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
         usuario_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE RESTRICT,
-        status TEXT NOT NULL DEFAULT 'pendente',
-        total REAL NOT NULL CHECK (total >= 0),
-        criado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        status     TEXT    NOT NULL DEFAULT '{StatusPedido.PENDENTE}'
+                           CHECK (status IN ({_STATUS_SQL})),
+        total      REAL    NOT NULL CHECK (total >= 0),
+        criado_em  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
     """
     CREATE TABLE IF NOT EXISTS itens_pedido (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        pedido_id INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,
-        produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
-        quantidade INTEGER NOT NULL CHECK (quantidade > 0),
-        preco_unitario REAL NOT NULL CHECK (preco_unitario >= 0)
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        pedido_id      INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,
+        produto_id     INTEGER NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
+        quantidade     INTEGER NOT NULL CHECK (quantidade > 0),
+        preco_unitario REAL    NOT NULL CHECK (preco_unitario >= 0)
     )
     """,
-    "CREATE INDEX IF NOT EXISTS idx_produtos_categoria ON produtos(categoria)",
     "CREATE INDEX IF NOT EXISTS idx_pedidos_usuario ON pedidos(usuario_id)",
     "CREATE INDEX IF NOT EXISTS idx_pedidos_status ON pedidos(status)",
     "CREATE INDEX IF NOT EXISTS idx_itens_pedido ON itens_pedido(pedido_id)",
+    "CREATE INDEX IF NOT EXISTS idx_itens_produto ON itens_pedido(produto_id)",
+    "CREATE INDEX IF NOT EXISTS idx_produtos_categoria ON produtos(categoria)",
 )
 
-_PRODUTOS_EXEMPLO = (
+PRODUTOS_EXEMPLO: tuple[tuple[str, str, float, int, str], ...] = (
     ("Notebook Gamer", "Notebook potente para jogos", 5999.99, 10, "informatica"),
     ("Mouse Wireless", "Mouse sem fio ergonômico", 89.90, 50, "informatica"),
     ("Teclado Mecânico", "Teclado mecânico RGB", 299.90, 30, "informatica"),
@@ -76,55 +85,48 @@ _PRODUTOS_EXEMPLO = (
 )
 
 
-def criar_schema() -> None:
-    conexao = get_db()
-    for ddl in _DDL:
-        conexao.execute(ddl)
-    conexao.commit()
+def criar_schema(conexao: sqlite3.Connection) -> None:
+    """Cria tabelas e índices caso ainda não existam."""
+    for statement in DDL:
+        conexao.execute(statement)
 
 
-def popular_dados_iniciais(settings) -> None:
-    """Insere catálogo de exemplo e, se configurado, o usuário admin.
+def popular_dados_exemplo(conexao: sqlite3.Connection) -> None:
+    """Insere catálogo e usuário admin de exemplo, se o banco estiver vazio.
 
-    O admin só é criado quando SEED_ADMIN_EMAIL/PASSWORD estão definidos e o
-    ambiente não é produção — o legado criava "admin@loja.com / admin123" sempre.
+    A senha do admin vem de ``SEED_ADMIN_PASSWORD``; sem ela, nenhum usuário é
+    criado — o código original gravava ``admin123`` em texto plano.
     """
-    conexao = get_db()
-
     if conexao.execute("SELECT COUNT(*) FROM produtos").fetchone()[0] == 0:
         conexao.executemany(
             "INSERT INTO produtos (nome, descricao, preco, estoque, categoria) "
             "VALUES (?, ?, ?, ?, ?)",
-            _PRODUTOS_EXEMPLO,
+            PRODUTOS_EXEMPLO,
         )
-        conexao.commit()
-        logger.info("Catálogo de exemplo inserido (%d produtos)", len(_PRODUTOS_EXEMPLO))
+        logger.info("Catálogo de exemplo carregado (%d produtos)", len(PRODUTOS_EXEMPLO))
 
-    if settings.is_production:
-        return
-    if not settings.seed_admin_email or not settings.seed_admin_password:
-        return
+    if conexao.execute("SELECT COUNT(*) FROM usuarios").fetchone()[0] == 0:
+        if not Config.SEED_ADMIN_PASSWORD:
+            logger.warning(
+                "SEED_ADMIN_PASSWORD não definida: nenhum usuário admin foi criado. "
+                "Defina a variável e reinicie, ou cadastre o admin manualmente."
+            )
+            return
 
-    ja_existe = conexao.execute(
-        "SELECT 1 FROM usuarios WHERE email = ?", (settings.seed_admin_email,)
-    ).fetchone()
-    if ja_existe:
-        return
-
-    conexao.execute(
-        "INSERT INTO usuarios (nome, email, senha_hash, tipo) VALUES (?, ?, ?, ?)",
-        (
-            "Admin",
-            settings.seed_admin_email,
-            hash_senha(settings.seed_admin_password),
-            TIPO_ADMIN,
-        ),
-    )
-    conexao.commit()
-    logger.info("Usuário admin de desenvolvimento criado: %s", settings.seed_admin_email)
+        conexao.execute(
+            "INSERT INTO usuarios (nome, email, senha_hash, tipo) VALUES (?, ?, ?, ?)",
+            (
+                "Admin",
+                "admin@loja.com",
+                hash_senha(Config.SEED_ADMIN_PASSWORD),
+                TipoUsuario.ADMIN,
+            ),
+        )
+        logger.info("Usuário admin de exemplo criado (admin@loja.com)")
 
 
-def init_database(app) -> None:
-    with app.app_context():
-        criar_schema()
-        popular_dados_iniciais(app.config["SETTINGS"])
+def init_db(conexao: sqlite3.Connection) -> None:
+    """Bootstrap completo do banco."""
+    criar_schema(conexao)
+    if Config.SEED_DATA:
+        popular_dados_exemplo(conexao)

@@ -1,9 +1,11 @@
-"""Entidade Produto — mapeia linha do banco e define a representação pública."""
+"""Entidade Produto."""
 
+import sqlite3
 from dataclasses import dataclass
+from typing import Any
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Produto:
     id: int
     nome: str
@@ -15,7 +17,7 @@ class Produto:
     criado_em: str
 
     @classmethod
-    def from_row(cls, row) -> "Produto":
+    def from_row(cls, row: sqlite3.Row) -> "Produto":
         return cls(
             id=row["id"],
             nome=row["nome"],
@@ -27,7 +29,7 @@ class Produto:
             criado_em=row["criado_em"],
         )
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "nome": self.nome,

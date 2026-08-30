@@ -1,128 +1,121 @@
-const UserRepository = require('../repositories/UserRepository');
-const CourseRepository = require('../repositories/CourseRepository');
-const EnrollmentRepository = require('../repositories/EnrollmentRepository');
-const PaymentRepository = require('../repositories/PaymentRepository');
-const AuditLogRepository = require('../repositories/AuditLogRepository');
-const User = require('../models/User');
-const config = require('../config/index');
-const { CARD_PREFIXES, PAYMENT_STATUS } = require('../config/constants');
+const { PaymentStatus, Roles } = require('../config/constants');
+const {
+    NotFoundError,
+    ConflictError,
+    PaymentDeclinedError,
+} = require('../utils/errors');
+const logger = require('../utils/logger');
 
 /**
- * Checkout Service
- * Handles business logic for course checkout and enrollment
+ * Regra de negócio do checkout: garante o usuário, cobra o cartão e matricula.
+ *
+ * Toda a persistência acontece dentro de uma transação — o código legado gravava
+ * matrícula, pagamento e auditoria em callbacks encadeados sem transação, então
+ * uma falha no meio deixava uma matrícula sem pagamento correspondente.
+ *
+ * Esta classe não conhece `req`/`res`: pode ser chamada por um controller HTTP,
+ * um worker ou um teste unitário.
  */
 class CheckoutService {
+    constructor({
+        db,
+        userRepository,
+        courseRepository,
+        enrollmentRepository,
+        paymentRepository,
+        auditLogRepository,
+        authService,
+        paymentGateway,
+    }) {
+        this.db = db;
+        this.userRepository = userRepository;
+        this.courseRepository = courseRepository;
+        this.enrollmentRepository = enrollmentRepository;
+        this.paymentRepository = paymentRepository;
+        this.auditLogRepository = auditLogRepository;
+        this.authService = authService;
+        this.paymentGateway = paymentGateway;
+    }
+
     /**
-     * Process checkout: create/find user, validate course, process payment, enroll
-     * @param {Object} checkoutData - { name, email, password, courseId, cardNumber }
-     * @returns {Promise<Object>} { enrollmentId, message }
-     * @throws {Error} If validation or business rules fail
+     * @param {{name: string, email: string, password: string, courseId: number, cardNumber: string}} input
+     * @returns {Promise<{enrollmentId: number, courseTitle: string, amount: number, userId: number}>}
      */
-    async processCheckout(checkoutData) {
-        const { name, email, password, courseId, cardNumber } = checkoutData;
-
-        // 1. Validate course exists and is active
-        const course = await CourseRepository.findActiveById(courseId);
+    async execute({ name, email, password, courseId, cardNumber }) {
+        const course = await this.courseRepository.findActiveById(courseId);
         if (!course) {
-            throw new Error('Course not found or not available');
+            throw new NotFoundError('Curso não encontrado ou inativo');
         }
 
-        // 2. Find or create user
-        let user = await UserRepository.findByEmail(email);
+        const user = await this.#findOrCreateUser({ name, email, password });
 
-        if (!user) {
-            // Create new user with hashed password
-            const hashedPassword = await User.hashPassword(password || 'TempPassword123!');
-            user = await UserRepository.create({
-                name,
-                email,
-                password: hashedPassword,
-                role: 'user'
-            });
-        }
-
-        // 3. Check if already enrolled
-        const alreadyEnrolled = await EnrollmentRepository.exists(user.id, courseId);
+        const alreadyEnrolled = await this.enrollmentRepository.findByUserAndCourse(
+            user.id,
+            course.id
+        );
         if (alreadyEnrolled) {
-            throw new Error('User is already enrolled in this course');
+            throw new ConflictError('Usuário já está matriculado neste curso');
         }
 
-        // 4. Simulate payment processing
-        const paymentStatus = this.processPaymentGateway(cardNumber, course.price);
+        // A cobrança acontece fora da transação: chamadas de rede não devem
+        // manter uma transação de banco aberta.
+        const charge = await this.paymentGateway.charge(cardNumber, course.price);
 
-        if (paymentStatus === PAYMENT_STATUS.DENIED) {
-            // Log failed attempt but don't create enrollment
-            await AuditLogRepository.log(
-                `Failed checkout attempt for course ${course.id} by user ${user.id}`,
-                user.id
+        if (charge.status !== PaymentStatus.PAID) {
+            logger.warn('Pagamento recusado', { userId: user.id, courseId: course.id });
+            throw new PaymentDeclinedError();
+        }
+
+        const enrollmentId = await this.db.transaction(async (tx) => {
+            const newEnrollmentId = await this.enrollmentRepository.create(
+                { userId: user.id, courseId: course.id },
+                tx
             );
-            throw new Error('Payment denied');
-        }
 
-        // 5. Create enrollment
-        const enrollment = await EnrollmentRepository.create(user.id, courseId);
+            await this.paymentRepository.create(
+                { enrollmentId: newEnrollmentId, amount: course.price, status: charge.status },
+                tx
+            );
 
-        // 6. Record payment
-        await PaymentRepository.create({
-            enrollment_id: enrollment.id,
-            amount: course.price,
-            status: paymentStatus
+            await this.auditLogRepository.create(
+                { action: `checkout:course=${course.id}`, actorId: user.id },
+                tx
+            );
+
+            return newEnrollmentId;
         });
 
-        // 7. Log successful checkout
-        await AuditLogRepository.log(
-            `Checkout: course ${course.id} (${course.title}) by user ${user.id}`,
-            user.id
-        );
+        logger.info('Checkout concluído', {
+            userId: user.id,
+            courseId: course.id,
+            enrollmentId,
+        });
 
         return {
-            enrollmentId: enrollment.id,
-            message: 'Checkout successful',
-            course: course.toJSON(),
-            user: user.toJSON()
+            enrollmentId,
+            userId: user.id,
+            courseTitle: course.title,
+            amount: course.price,
         };
     }
 
     /**
-     * Simulate payment gateway processing
-     * @param {string} cardNumber - Credit card number
-     * @param {number} amount - Payment amount
-     * @returns {string} Payment status (PAID or DENIED)
-     * @private
+     * Reaproveita a conta existente ou cria uma nova. A senha é obrigatória e
+     * validada na borda — o código legado caía no fallback silencioso `"123456"`,
+     * criando contas com senha padrão sem o usuário saber.
      */
-    processPaymentGateway(cardNumber, amount) {
-        // Simple simulation: Visa cards (starting with 4) are approved
-        console.log(`[Payment Gateway] Processing card ${cardNumber.substring(0, 4)}**** for $${amount} using key ${config.paymentGatewayKey}`);
+    async #findOrCreateUser({ name, email, password }) {
+        const existing = await this.userRepository.findByEmail(email);
+        if (existing) return existing;
 
-        if (cardNumber.startsWith(CARD_PREFIXES.VISA)) {
-            return PAYMENT_STATUS.PAID;
-        }
-
-        return PAYMENT_STATUS.DENIED;
-    }
-
-    /**
-     * Get user enrollments with course details
-     * @param {number} userId
-     * @returns {Promise<Array>}
-     */
-    async getUserEnrollments(userId) {
-        const enrollments = await EnrollmentRepository.findByUserId(userId);
-
-        const result = [];
-        for (const enrollment of enrollments) {
-            const course = await CourseRepository.findById(enrollment.course_id);
-            const payment = await PaymentRepository.findByEnrollmentId(enrollment.id);
-
-            result.push({
-                enrollment: enrollment.toJSON(),
-                course: course ? course.toJSON() : null,
-                payment: payment ? payment.toJSON() : null
-            });
-        }
-
-        return result;
+        const passwordHash = await this.authService.hashPassword(password);
+        return this.userRepository.create({
+            name,
+            email,
+            passwordHash,
+            role: Roles.USER,
+        });
     }
 }
 
-module.exports = new CheckoutService();
+module.exports = CheckoutService;

@@ -1,56 +1,42 @@
-"""Autenticação: cadastro, login e emissão de token."""
+"""Autenticação de usuários."""
 
 import logging
-import sqlite3
 
-from src.config.constants import TIPO_CLIENTE
-from src.repositories import usuario_repository
-from src.utils.errors import ConflictError, UnauthorizedError
+from src.models.usuario import Usuario
+from src.repositories.usuario_repository import UsuarioRepository
+from src.schemas.usuario_schema import LoginInput
+from src.utils.errors import UnauthorizedError
 from src.utils.security import gerar_token, hash_senha, verificar_senha
 
 logger = logging.getLogger(__name__)
 
-# Hash descartável usado quando o email não existe, para que o tempo de resposta
-# do login não revele se a conta está cadastrada (timing oracle).
-_HASH_DUMMY = hash_senha("senha-inexistente-para-comparacao-constante")
+# Hash descartável usado para igualar o custo do login quando o e-mail não
+# existe, evitando que o tempo de resposta revele quais e-mails estão cadastrados.
+_HASH_DUMMY = hash_senha("senha-inexistente-para-timing-equalization")
 
 
-def registrar(dados_validados: dict) -> dict:
-    try:
-        usuario_id = usuario_repository.inserir(
-            nome=dados_validados["nome"],
-            email=dados_validados["email"],
-            senha_hash=hash_senha(dados_validados["senha"]),
-            tipo=TIPO_CLIENTE,
-        )
-    except sqlite3.IntegrityError as exc:
-        # A constraint UNIQUE(email) é a fonte da verdade: checar antes abriria
-        # uma janela de corrida entre a checagem e o insert.
-        raise ConflictError("Email já cadastrado") from exc
+class AuthService:
+    def __init__(self, repositorio: UsuarioRepository | None = None) -> None:
+        self.repositorio = repositorio or UsuarioRepository()
 
-    logger.info("Usuário criado", extra={"usuario_id": usuario_id})
-    return {"id": usuario_id}
+    def autenticar(self, entrada: LoginInput) -> tuple[str, Usuario]:
+        """Valida credenciais e emite um token de acesso.
 
+        Raises:
+            UnauthorizedError: credenciais inválidas. A mensagem é genérica de
+                propósito — distinguir "e-mail não existe" de "senha errada"
+                entrega uma lista de usuários válidos ao atacante.
+        """
+        usuario = self.repositorio.buscar_por_email_com_senha(entrada.email)
 
-def autenticar(dados_validados: dict, settings) -> dict:
-    usuario = usuario_repository.buscar_por_email(dados_validados["email"])
-    hash_para_comparar = usuario.senha_hash if usuario else _HASH_DUMMY
-    senha_confere = verificar_senha(dados_validados["senha"], hash_para_comparar)
+        if usuario is None:
+            verificar_senha(entrada.senha, _HASH_DUMMY)
+            logger.warning("Tentativa de login para e-mail não cadastrado")
+            raise UnauthorizedError("E-mail ou senha inválidos.")
 
-    if usuario is None or not senha_confere:
-        logger.warning("Tentativa de login falhou")
-        # Mensagem genérica: não revela se o erro foi no email ou na senha.
-        raise UnauthorizedError("Email ou senha inválidos")
+        if not verificar_senha(entrada.senha, usuario.senha_hash):
+            logger.warning("Senha incorreta para o usuário %s", usuario.id)
+            raise UnauthorizedError("E-mail ou senha inválidos.")
 
-    token = gerar_token(
-        usuario_id=usuario.id,
-        tipo=usuario.tipo,
-        secret_key=settings.secret_key,
-        expiracao_minutos=settings.jwt_expiration_minutes,
-    )
-    logger.info("Login bem-sucedido", extra={"usuario_id": usuario.id})
-    return {
-        "token": token,
-        "expira_em_minutos": settings.jwt_expiration_minutes,
-        "usuario": usuario.to_dict(),
-    }
+        logger.info("Login bem-sucedido para o usuário %s", usuario.id)
+        return gerar_token(usuario.id, usuario.tipo), usuario

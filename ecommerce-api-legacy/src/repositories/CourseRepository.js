@@ -1,61 +1,20 @@
-const database = require('../config/database');
-const Course = require('../models/Course');
-
-/**
- * Course Repository
- * Handles database operations for courses
- */
+/** Acesso a dados da entidade `courses`. */
 class CourseRepository {
-    /**
-     * Find course by ID
-     * @param {number} courseId
-     * @returns {Promise<Course|null>}
-     */
-    async findById(courseId) {
-        const row = await database.get('SELECT * FROM courses WHERE id = ?', [courseId]);
-        return row ? new Course(row) : null;
+    constructor(db) {
+        this.db = db;
     }
 
-    /**
-     * Find active course by ID
-     * @param {number} courseId
-     * @returns {Promise<Course|null>}
-     */
-    async findActiveById(courseId) {
-        const row = await database.get(
-            'SELECT * FROM courses WHERE id = ? AND active = 1',
-            [courseId]
-        );
-        return row ? new Course(row) : null;
+    findById(id, executor = this.db) {
+        return executor.get('SELECT * FROM courses WHERE id = ?', [id]);
     }
 
-    /**
-     * Find all courses
-     * @param {boolean} activeOnly - Filter only active courses
-     * @returns {Promise<Course[]>}
-     */
-    async findAll(activeOnly = false) {
-        const query = activeOnly
-            ? 'SELECT * FROM courses WHERE active = 1'
-            : 'SELECT * FROM courses';
-
-        const rows = await database.all(query);
-        return rows.map(row => new Course(row));
+    findActiveById(id, executor = this.db) {
+        return executor.get('SELECT * FROM courses WHERE id = ? AND active = 1', [id]);
     }
 
-    /**
-     * Create a new course
-     * @param {Object} courseData - { title, price, active }
-     * @returns {Promise<Course>}
-     */
-    async create(courseData) {
-        const result = await database.run(
-            'INSERT INTO courses (title, price, active) VALUES (?, ?, ?)',
-            [courseData.title, courseData.price, courseData.active ?? 1]
-        );
-
-        return this.findById(result.lastID);
+    findAll(executor = this.db) {
+        return executor.all('SELECT * FROM courses ORDER BY id');
     }
 }
 
-module.exports = new CourseRepository();
+module.exports = CourseRepository;

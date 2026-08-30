@@ -1,5 +1,13 @@
+from src.controllers.auth_controller import AuthController
+from src.controllers.category_controller import CategoryController
+from src.controllers.report_controller import ReportController
 from src.controllers.task_controller import TaskController
 from src.controllers.user_controller import UserController
-from src.controllers.report_controller import ReportController, CategoryController
 
-__all__ = ["TaskController", "UserController", "ReportController", "CategoryController"]
+__all__ = [
+    'AuthController',
+    'CategoryController',
+    'ReportController',
+    'TaskController',
+    'UserController',
+]

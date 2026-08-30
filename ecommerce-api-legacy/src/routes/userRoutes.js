@@ -1,39 +1,33 @@
-const express = require('express');
-const UserController = require('../controllers/UserController');
-const CheckoutController = require('../controllers/CheckoutController');
-const { requireAuth } = require('../middlewares/auth');
-const { asyncHandler } = require('../middlewares/errorHandler');
+const { Router } = require('express');
 
-const router = express.Router();
+const { requireAuth, requireSelfOrAdmin } = require('../middlewares/auth');
+const validate = require('../middlewares/validate');
+const { userIdParamSchema } = require('../validators/schemas');
 
 /**
- * GET /api/users/:id
- * Get user by ID (requires authentication)
+ * Rotas de usuário. Toda operação exige autenticação e, além disso, que o
+ * solicitante seja o dono do recurso ou um admin (proteção contra IDOR).
  */
-router.get(
-    '/:id',
-    requireAuth,
-    asyncHandler(UserController.getUser.bind(UserController))
-);
+module.exports = ({ userController, authService }) => {
+    const router = Router();
 
-/**
- * DELETE /api/users/:id
- * Delete user (requires authentication + authorization)
- */
-router.delete(
-    '/:id',
-    requireAuth,
-    asyncHandler(UserController.deleteUser.bind(UserController))
-);
+    const ownership = requireSelfOrAdmin((req) => req.validated.params.id);
 
-/**
- * GET /api/users/:userId/enrollments
- * Get user's enrollments (requires authentication)
- */
-router.get(
-    '/:userId/enrollments',
-    requireAuth,
-    asyncHandler(CheckoutController.getUserEnrollments.bind(CheckoutController))
-);
+    router.get(
+        '/:id',
+        validate(userIdParamSchema, 'params'),
+        requireAuth(authService),
+        ownership,
+        userController.getById
+    );
 
-module.exports = router;
+    router.delete(
+        '/:id',
+        validate(userIdParamSchema, 'params'),
+        requireAuth(authService),
+        ownership,
+        userController.remove
+    );
+
+    return router;
+};

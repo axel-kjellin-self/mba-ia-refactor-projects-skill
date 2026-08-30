@@ -1,9 +1,8 @@
 .env
-__pycache__/
-*.pyc
-*.pyo
 *.db
-.pytest_cache/
+__pycache__/
+*.py[cod]
 .venv/
 venv/
-*.log
+.pytest_cache/
+instance/

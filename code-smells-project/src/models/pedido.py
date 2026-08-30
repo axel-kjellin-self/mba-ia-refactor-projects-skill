@@ -1,9 +1,10 @@
 """Entidades Pedido e ItemPedido."""
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ItemPedido:
     produto_id: int
     produto_nome: str
@@ -12,28 +13,28 @@ class ItemPedido:
 
     @property
     def subtotal(self) -> float:
-        return self.quantidade * self.preco_unitario
+        return round(self.quantidade * self.preco_unitario, 2)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "produto_id": self.produto_id,
             "produto_nome": self.produto_nome,
             "quantidade": self.quantidade,
             "preco_unitario": self.preco_unitario,
-            "subtotal": round(self.subtotal, 2),
+            "subtotal": self.subtotal,
         }
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class Pedido:
     id: int
     usuario_id: int
     status: str
     total: float
     criado_em: str
-    itens: list = field(default_factory=list)
+    itens: list[ItemPedido] = field(default_factory=list)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "usuario_id": self.usuario_id,
@@ -42,3 +43,11 @@ class Pedido:
             "criado_em": self.criado_em,
             "itens": [item.to_dict() for item in self.itens],
         }
+
+
+@dataclass(frozen=True, slots=True)
+class ItemPedidoInput:
+    """Item solicitado pelo cliente, já validado."""
+
+    produto_id: int
+    quantidade: int

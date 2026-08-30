@@ -1,18 +1,21 @@
-"""Rotas de usuário e autenticação."""
+"""Rotas de usuários e autenticação.
+
+Cadastro e login são públicos; a listagem completa é exclusiva de
+administradores e a consulta individual exige ser o próprio usuário.
+"""
 
 from flask import Blueprint
 
-from src.controllers import usuario_controller
-from src.middlewares.auth import admin_required, login_required
+from src.controllers.usuario_controller import UsuarioController
+from src.middlewares.auth import require_admin, require_self_or_admin
 
-usuario_bp = Blueprint("usuarios", __name__, url_prefix="/usuarios")
-auth_bp = Blueprint("auth", __name__)
+usuario_bp = Blueprint("usuarios", __name__)
+_controller = UsuarioController()
 
-# Listar todos os usuários é operação administrativa; a consulta individual
-# valida ownership dentro do controller.
-usuario_bp.get("")(admin_required(usuario_controller.listar_usuarios))
-usuario_bp.get("/<int:usuario_id>")(login_required(usuario_controller.buscar_usuario))
-usuario_bp.post("")(usuario_controller.criar_usuario)
+usuario_bp.post("/usuarios")(_controller.criar)
+usuario_bp.post("/login")(_controller.login)
 
-auth_bp.post("/login")(usuario_controller.login)
-auth_bp.get("/me")(login_required(usuario_controller.perfil))
+usuario_bp.get("/usuarios")(require_admin(_controller.listar))
+usuario_bp.get("/usuarios/<int:usuario_id>")(
+    require_self_or_admin("usuario_id")(_controller.buscar)
+)

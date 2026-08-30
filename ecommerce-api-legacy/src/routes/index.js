@@ -1,27 +1,22 @@
-const express = require('express');
+const { Router } = require('express');
+
 const authRoutes = require('./authRoutes');
 const checkoutRoutes = require('./checkoutRoutes');
-const adminRoutes = require('./adminRoutes');
+const reportRoutes = require('./reportRoutes');
 const userRoutes = require('./userRoutes');
 
-/**
- * Register all application routes
- * @param {Express} app - Express application instance
- */
-function registerRoutes(app) {
-    // Health check endpoint
-    app.get('/health', (req, res) => {
-        res.status(200).json({
-            status: 'healthy',
-            timestamp: new Date().toISOString()
-        });
-    });
+/** Agrega todas as rotas da aplicação sob o prefixo `/api`. */
+function buildRouter(container) {
+    const router = Router();
 
-    // API routes
-    app.use('/api/auth', authRoutes);
-    app.use('/api/checkout', checkoutRoutes);
-    app.use('/api/admin', adminRoutes);
-    app.use('/api/users', userRoutes);
+    router.get('/health', (req, res) => res.json({ status: 'ok' }));
+
+    router.use('/auth', authRoutes(container));
+    router.use('/checkout', checkoutRoutes(container));
+    router.use('/admin', reportRoutes(container));
+    router.use('/users', userRoutes(container));
+
+    return router;
 }
 
-module.exports = { registerRoutes };
+module.exports = buildRouter;

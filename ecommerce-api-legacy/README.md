@@ -1,270 +1,96 @@
-# LMS API - Refactored
+# ecommerce-api-legacy
 
-Learning Management System API with checkout flow, refactored to follow MVC architecture pattern with proper separation of concerns.
+LMS API (com fluxo de checkout) em Node.js/Express, refatorada de um monolito de
+3 arquivos para uma arquitetura MVC em camadas.
 
-## What Changed?
-
-This project has been refactored from a legacy monolith into a clean MVC architecture:
-
-### Before (Legacy)
-- ❌ All logic in one 142-line `AppManager.js` God Class
-- ❌ Hardcoded credentials in source code
-- ❌ Weak custom cryptography (Base64 encoding)
-- ❌ No authentication/authorization
-- ❌ Callback hell (5+ levels deep)
-- ❌ N+1 query problem
-- ❌ No separation of concerns
-
-### After (Refactored) ✅
-- ✅ **MVC Architecture**: Models, Services, Controllers, Routes
-- ✅ **Security**: bcrypt password hashing, JWT authentication
-- ✅ **Configuration**: Environment variables via `.env`
-- ✅ **Database**: Proper constraints (FK, UNIQUE, CHECK)
-- ✅ **Performance**: Optimized queries with JOINs (no N+1)
-- ✅ **Error Handling**: Centralized error middleware
-- ✅ **Code Quality**: Proper separation of concerns
-
-## Architecture
-
-```
-src/
-├── config/
-│   ├── index.js          # Configuration loader (reads .env)
-│   ├── database.js       # Database connection with promisified methods
-│   └── constants.js      # Application constants
-├── models/               # Data entities
-│   ├── User.js
-│   ├── Course.js
-│   ├── Enrollment.js
-│   └── Payment.js
-├── repositories/         # Data Access Layer
-│   ├── UserRepository.js
-│   ├── CourseRepository.js
-│   ├── EnrollmentRepository.js
-│   ├── PaymentRepository.js
-│   └── AuditLogRepository.js
-├── services/             # Business Logic
-│   ├── AuthService.js    # JWT authentication
-│   ├── CheckoutService.js # Checkout workflow
-│   └── ReportService.js  # Financial reports
-├── controllers/          # HTTP Orchestration
-│   ├── AuthController.js
-│   ├── CheckoutController.js
-│   ├── AdminController.js
-│   └── UserController.js
-├── routes/               # Route definitions
-│   ├── authRoutes.js
-│   ├── checkoutRoutes.js
-│   ├── adminRoutes.js
-│   ├── userRoutes.js
-│   └── index.js
-├── middlewares/          # Cross-cutting concerns
-│   ├── auth.js           # JWT authentication middleware
-│   ├── errorHandler.js   # Global error handling
-│   └── logger.js         # Request logging
-└── app.js                # Application entry point
-```
-
-## Installation
+## Como rodar
 
 ```bash
-# Install dependencies
 npm install
-
-# The .env file is already created for development
-# For production, copy .env.example and fill in real values
-```
-
-## Running
-
-```bash
+cp .env.example .env
+# Gere um segredo forte para o JWT:
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+# Cole o resultado em JWT_SECRET no .env
 npm start
 ```
 
-The API will start on `http://localhost:3000`.
+A aplicação sobe em `http://localhost:3000`. O banco SQLite é em memória por
+padrão (`DATABASE_FILE=:memory:`) e carrega seeds no boot.
 
-## Environment Variables
+Exemplos de requisições estão em `api.http`.
 
-Required variables (already set in `.env` for development):
+## Arquitetura
 
-```bash
-PORT=3000
-NODE_ENV=development
-JWT_SECRET=your-super-secret-jwt-key-min-32-characters-long-please
-JWT_EXPIRES_IN=24h
-PAYMENT_GATEWAY_KEY=pk_test_demo_key_for_development
+```
+server.js                    Entry point: valida config, conecta ao banco, sobe o servidor
+src/
+├── app.js                   Application factory (Express)
+├── container.js             Composition root — monta o grafo de dependências
+├── config/
+│   ├── index.js             Configuração via variáveis de ambiente + fail-fast
+│   ├── constants.js         Constantes de domínio (status, roles, regras)
+│   └── database.js          Wrapper Promise sobre sqlite3, com transações
+├── models/
+│   └── schema.js            DDL (FKs, constraints, índices) e seeds
+├── repositories/            Acesso a dados — uma classe por entidade
+├── services/                Regra de negócio pura (sem HTTP)
+│   └── PaymentGateway.js    Fronteira com o provedor de pagamento
+├── controllers/             Orquestração HTTP (request → service → response)
+├── routes/                  Mapeamento URL → middleware → controller
+├── middlewares/             auth, validate, errorHandler, requestLogger
+├── validators/              Schemas Zod de validação de input
+└── utils/                   logger estruturado, hierarquia de erros
 ```
 
-## API Endpoints
+**Fluxo de um request:** `routes` → `validate` → `auth` → `controller` →
+`service` → `repository` → `database`. Erros sobem via `next(err)` até o
+`errorHandler` central, que traduz a exceção em status code e corpo JSON.
 
-### Authentication
+## Endpoints
 
-#### Login
-```http
-POST /api/auth/login
-Content-Type: application/json
+| Método | Rota | Auth | Descrição |
+|--------|------|------|-----------|
+| GET | `/api/health` | — | Health check |
+| POST | `/api/auth/login` | — | Autentica e retorna um JWT |
+| POST | `/api/checkout` | — | Cadastro + compra de curso |
+| GET | `/api/admin/financial-report` | admin | Receita e alunos por curso |
+| GET | `/api/users/:id` | dono ou admin | Dados do usuário |
+| DELETE | `/api/users/:id` | dono ou admin | Remove usuário e dados associados |
 
-{
-  "email": "leonan@fullcycle.com.br",
-  "password": "SecurePassword123!"
-}
-```
+Autenticação via header `Authorization: Bearer <token>`.
 
-Response:
+### Formato de erro
+
 ```json
 {
-  "user": {
-    "id": 1,
-    "name": "Leonan",
-    "email": "leonan@fullcycle.com.br",
-    "role": "admin"
-  },
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Dados inválidos",
+    "details": [{ "field": "password", "message": "A senha deve ter no mínimo 12 caracteres" }]
+  }
 }
 ```
 
-#### Register
-```http
-POST /api/auth/register
-Content-Type: application/json
+Status usados: `400` validação, `401` não autenticado, `402` pagamento recusado,
+`403` sem permissão, `404` não encontrado, `409` conflito, `500` erro interno.
 
-{
-  "name": "John Doe",
-  "email": "john@example.com",
-  "password": "SecurePassword123!"
-}
-```
+## Configuração
 
-### Checkout
+Todos os secrets vêm de variáveis de ambiente — ver `.env.example`. A aplicação
+**não inicia** se `JWT_SECRET` ou `PAYMENT_GATEWAY_KEY` estiverem ausentes, ou se
+o segredo JWT tiver menos de 32 caracteres.
 
-#### Process Checkout
-```http
-POST /api/checkout
-Content-Type: application/json
+O `.env` está no `.gitignore` e nunca deve ser commitado.
 
-{
-  "usr": "John Doe",
-  "eml": "john@example.com",
-  "pwd": "password123",
-  "c_id": 1,
-  "card": "4111111111111111"
-}
-```
+## Notas de segurança
 
-**Note**: Card numbers starting with `4` (Visa) are approved, others are denied.
+- Senhas com **bcrypt** (12 rounds). O hash nunca aparece em respostas de API.
+- Número de cartão nunca é logado por completo — apenas os 4 últimos dígitos
+  (PCI-DSS 3.4). A chave do gateway jamais vai para o log.
+- Rotas administrativas e destrutivas exigem JWT válido e autorização por papel.
+- `PRAGMA foreign_keys = ON` com `ON DELETE CASCADE`: deletar um usuário remove
+  suas matrículas e pagamentos, sem deixar registros órfãos.
+- Checkout grava matrícula, pagamento e auditoria em uma única transação.
 
-### Admin (Requires JWT + Admin Role)
-
-#### Financial Report
-```http
-GET /api/admin/financial-report
-Authorization: Bearer <your-jwt-token>
-```
-
-Response:
-```json
-{
-  "report": [
-    {
-      "course": "Clean Architecture",
-      "revenue": 997.00,
-      "students": [
-        {
-          "student": "Leonan",
-          "email": "leonan@fullcycle.com.br",
-          "paid": 997.00,
-          "status": "PAID"
-        }
-      ]
-    }
-  ]
-}
-```
-
-#### Revenue Summary
-```http
-GET /api/admin/revenue-summary
-Authorization: Bearer <your-jwt-token>
-```
-
-### Users (Requires JWT)
-
-#### Get User
-```http
-GET /api/users/:id
-Authorization: Bearer <your-jwt-token>
-```
-
-#### Delete User
-```http
-DELETE /api/users/:id
-Authorization: Bearer <your-jwt-token>
-```
-
-**Note**: Users can only delete their own account unless they have admin role.
-
-#### Get User Enrollments
-```http
-GET /api/users/:userId/enrollments
-Authorization: Bearer <your-jwt-token>
-```
-
-## Security Improvements
-
-1. **Password Hashing**: bcrypt with 12 salt rounds (replaces weak Base64 encoding)
-2. **JWT Authentication**: Protected admin and user endpoints
-3. **Environment Variables**: No hardcoded secrets
-4. **Database Constraints**: Foreign keys, unique constraints, cascading deletes
-5. **Input Validation**: Proper error messages and status codes
-6. **Authorization**: Role-based access control (RBAC)
-
-## Performance Improvements
-
-1. **Optimized Queries**: Financial report uses single JOIN query instead of N+1
-2. **Async/Await**: No callback hell, linear code flow
-3. **Proper Indexing**: Database constraints provide automatic indexing
-
-## Code Quality Improvements
-
-1. **Separation of Concerns**: MVC layers with clear responsibilities
-2. **Error Handling**: Centralized error middleware
-3. **Logging**: Structured request/response logging
-4. **Constants**: Magic numbers extracted to named constants
-5. **Documentation**: JSDoc comments on all public methods
-
-## Testing the Refactoring
-
-Compare with the legacy version in git history:
-
-```bash
-# View the legacy code
-git show HEAD~1:src/AppManager.js
-
-# See the transformation
-git diff HEAD~1 HEAD
-```
-
-## Default Credentials
-
-The application seeds one admin user:
-
-- **Email**: `leonan@fullcycle.com.br`
-- **Password**: `SecurePassword123!`
-
-Use these credentials to login and get a JWT token for testing admin endpoints.
-
-## Database Schema
-
-The application uses SQLite in-memory database with the following schema:
-
-- `users` (id, name, email, password, role, created_at)
-- `courses` (id, title, price, active, created_at)
-- `enrollments` (id, user_id, course_id, created_at) + FK constraints
-- `payments` (id, enrollment_id, amount, status, created_at) + FK constraints
-- `audit_logs` (id, action, user_id, created_at)
-
-All tables have proper constraints (NOT NULL, UNIQUE, CHECK, FOREIGN KEY).
-
-## License
-
-MIT
+> O `FakePaymentGateway` aprova cartões iniciados em `4`. É uma implementação de
+> desenvolvimento — substitua por um gateway real antes de ir a produção.

@@ -1,31 +1,67 @@
-@baseUrl = http://localhost:3000
+@baseUrl = http://localhost:3000/api
 
-### Checkout - sucesso
-POST {{baseUrl}}/api/checkout
+### Health check
+GET {{baseUrl}}/health
+
+### Login (admin) — copie o token para a variável abaixo
+# @name login
+POST {{baseUrl}}/auth/login
 Content-Type: application/json
 
 {
-  "usr": "Guilherme",
-  "eml": "gui@fullcycle.com.br",
-  "pwd": "senhaforte",
-  "c_id": 2,
-  "card": "4111222233334444"
+  "email": "admin@fullcycle.com.br",
+  "password": "senha-local-de-desenvolvimento"
 }
 
-### Checkout - pagamento recusado
-POST {{baseUrl}}/api/checkout
+@token = {{login.response.body.token}}
+
+### Checkout - sucesso (cartão iniciado em 4 é aprovado pelo gateway fake)
+POST {{baseUrl}}/checkout
 Content-Type: application/json
 
 {
-  "usr": "João",
-  "eml": "joao@teste.com",
-  "pwd": "123",
-  "c_id": 1,
-  "card": "5111222233334444"
+  "name": "Guilherme",
+  "email": "gui@fullcycle.com.br",
+  "password": "senhaforte123456",
+  "courseId": 2,
+  "cardNumber": "4111222233334444"
 }
 
-### Relatório financeiro administrativo
-GET {{baseUrl}}/api/admin/financial-report
+### Checkout - pagamento recusado (402)
+POST {{baseUrl}}/checkout
+Content-Type: application/json
 
-### Deletar usuário
-DELETE {{baseUrl}}/api/users/1
+{
+  "name": "João",
+  "email": "joao@teste.com",
+  "password": "outrasenhaforte1",
+  "courseId": 1,
+  "cardNumber": "5111222233334444"
+}
+
+### Checkout - senha curta (400 com detalhes de validação)
+POST {{baseUrl}}/checkout
+Content-Type: application/json
+
+{
+  "name": "Zé",
+  "email": "ze@teste.com",
+  "password": "123",
+  "courseId": 1,
+  "cardNumber": "4111222233334444"
+}
+
+### Relatório financeiro - sem token (401)
+GET {{baseUrl}}/admin/financial-report
+
+### Relatório financeiro - com token de admin (200)
+GET {{baseUrl}}/admin/financial-report
+Authorization: Bearer {{token}}
+
+### Buscar usuário (dono da conta ou admin)
+GET {{baseUrl}}/users/1
+Authorization: Bearer {{token}}
+
+### Deletar usuário (204; matrículas e pagamentos são removidos em cascata)
+DELETE {{baseUrl}}/users/2
+Authorization: Bearer {{token}}

@@ -1,63 +1,50 @@
-const database = require('../config/database');
-const User = require('../models/User');
-
 /**
- * User Repository
- * Handles database operations for users
+ * Acesso a dados da entidade `users`. Sem regra de negócio e sem HTTP.
+ *
+ * `pass` nunca é incluído nos SELECTs de leitura — apenas em `findByEmailWithPassword`,
+ * usado exclusivamente pelo fluxo de login.
  */
 class UserRepository {
-    /**
-     * Find user by ID
-     * @param {number} userId
-     * @returns {Promise<User|null>}
-     */
-    async findById(userId) {
-        const row = await database.get('SELECT * FROM users WHERE id = ?', [userId]);
-        return row ? new User(row) : null;
+    constructor(db) {
+        this.db = db;
     }
 
-    /**
-     * Find user by email
-     * @param {string} email
-     * @returns {Promise<User|null>}
-     */
-    async findByEmail(email) {
-        const row = await database.get('SELECT * FROM users WHERE email = ?', [email]);
-        return row ? new User(row) : null;
+    /** Colunas públicas — jamais expor o hash da senha em respostas de API. */
+    static get PUBLIC_COLUMNS() {
+        return 'id, name, email, role, created_at';
     }
 
-    /**
-     * Create a new user
-     * @param {Object} userData - { name, email, password (hashed), role }
-     * @returns {Promise<User>}
-     */
-    async create(userData) {
-        const result = await database.run(
-            'INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)',
-            [userData.name, userData.email, userData.password, userData.role || 'user']
+    findById(id, executor = this.db) {
+        return executor.get(
+            `SELECT ${UserRepository.PUBLIC_COLUMNS} FROM users WHERE id = ?`,
+            [id]
         );
-
-        return this.findById(result.lastID);
     }
 
-    /**
-     * Delete user by ID
-     * @param {number} userId
-     * @returns {Promise<boolean>}
-     */
-    async delete(userId) {
-        const result = await database.run('DELETE FROM users WHERE id = ?', [userId]);
-        return result.changes > 0;
+    findByEmail(email, executor = this.db) {
+        return executor.get(
+            `SELECT ${UserRepository.PUBLIC_COLUMNS} FROM users WHERE email = ?`,
+            [email]
+        );
     }
 
-    /**
-     * Find all users
-     * @returns {Promise<User[]>}
-     */
-    async findAll() {
-        const rows = await database.all('SELECT * FROM users');
-        return rows.map(row => new User(row));
+    /** Inclui o hash da senha. Use apenas na autenticação. */
+    findByEmailWithPassword(email, executor = this.db) {
+        return executor.get('SELECT * FROM users WHERE email = ?', [email]);
+    }
+
+    async create({ name, email, passwordHash, role }, executor = this.db) {
+        const { lastID } = await executor.run(
+            'INSERT INTO users (name, email, pass, role) VALUES (?, ?, ?, ?)',
+            [name, email, passwordHash, role]
+        );
+        return this.findById(lastID, executor);
+    }
+
+    async deleteById(id, executor = this.db) {
+        const { changes } = await executor.run('DELETE FROM users WHERE id = ?', [id]);
+        return changes > 0;
     }
 }
 
-module.exports = new UserRepository();
+module.exports = UserRepository;

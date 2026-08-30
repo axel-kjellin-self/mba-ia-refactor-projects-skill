@@ -1,41 +1,42 @@
+"""Schemas de Category — validação de input e serialização de output."""
 from marshmallow import Schema, fields, validate
-from src.config.constants import ValidationRules
 
+from src.config.constants import (
+    DEFAULT_COLOR,
+    HEX_COLOR_PATTERN,
+    MAX_CATEGORY_DESCRIPTION_LENGTH,
+    MAX_CATEGORY_NAME_LENGTH,
+)
 
-class CategorySchema(Schema):
-    """Schema for category serialization"""
-    id = fields.Int(dump_only=True)
-    name = fields.Str(required=True, validate=validate.Length(
-        max=ValidationRules.MAX_CATEGORY_NAME_LENGTH
-    ))
-    description = fields.Str(allow_none=True, validate=validate.Length(
-        max=ValidationRules.MAX_CATEGORY_DESC_LENGTH
-    ))
-    color = fields.Str(missing='#000000')
-    created_at = fields.DateTime(dump_only=True)
-    task_count = fields.Int(dump_only=True)
+_name = validate.Length(min=1, max=MAX_CATEGORY_NAME_LENGTH)
+_description = validate.Length(max=MAX_CATEGORY_DESCRIPTION_LENGTH)
+_color = validate.Regexp(HEX_COLOR_PATTERN, error='Cor deve estar no formato hexadecimal #RRGGBB')
 
 
 class CategoryCreateSchema(Schema):
-    """Schema for category creation"""
-    name = fields.Str(required=True, validate=validate.Length(
-        max=ValidationRules.MAX_CATEGORY_NAME_LENGTH
-    ))
-    description = fields.Str(allow_none=True)
-    color = fields.Str(missing='#000000')
+    name = fields.Str(required=True, validate=_name)
+    description = fields.Str(load_default='', allow_none=True, validate=_description)
+    color = fields.Str(load_default=DEFAULT_COLOR, validate=_color)
 
 
 class CategoryUpdateSchema(Schema):
-    """Schema for category update"""
-    name = fields.Str(validate=validate.Length(
-        max=ValidationRules.MAX_CATEGORY_NAME_LENGTH
-    ))
-    description = fields.Str(allow_none=True)
-    color = fields.Str()
+    name = fields.Str(validate=_name)
+    description = fields.Str(allow_none=True, validate=_description)
+    color = fields.Str(validate=_color)
 
 
-# Schema instances
-category_schema = CategorySchema()
-categories_schema = CategorySchema(many=True)
 category_create_schema = CategoryCreateSchema()
 category_update_schema = CategoryUpdateSchema()
+
+
+def serialize_category(category, task_count: int | None = None) -> dict:
+    data = {
+        'id': category.id,
+        'name': category.name,
+        'description': category.description,
+        'color': category.color,
+        'created_at': category.created_at.isoformat() if category.created_at else None,
+    }
+    if task_count is not None:
+        data['task_count'] = task_count
+    return data

@@ -1,95 +1,120 @@
 # code-smells-project
 
-API de E-commerce em Python/Flask, refatorada do monolito legado para uma
-arquitetura MVC + Service Layer.
+API de E-commerce em Python/Flask, refatorada do monolito original para uma
+arquitetura MVC em camadas (MVCS).
 
-## Setup
+## Como rodar
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env      # ajuste SECRET_KEY e, em dev, SEED_ADMIN_*
+
+cp .env.example .env
+# Gere a chave e cole em SECRET_KEY:
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+# Defina também SEED_ADMIN_PASSWORD para que o admin de exemplo seja criado.
+
 python app.py
 ```
 
-A aplicação sobe em `http://127.0.0.1:5000`. Em desenvolvimento o schema é criado
-no boot; em produção, rode `flask init-db` explicitamente e sirva via WSGI:
+A aplicação sobe em `http://127.0.0.1:5000`. O banco SQLite é criado no primeiro
+boot com o catálogo de exemplo. A aplicação **não inicia** sem `SECRET_KEY` — é
+proposital: uma chave default previsível invalidaria toda a autenticação.
+
+Em produção, use um servidor WSGI:
 
 ```bash
-gunicorn -w 4 -b 0.0.0.0:5000 app:app
+gunicorn "app:app"
 ```
 
-### Testes
+## Testes
 
 ```bash
-pytest tests/ -q
+python -m pytest tests/ -q
 ```
+
+## Autenticação
+
+Todas as rotas de escrita exigem um token JWT obtido no login:
+
+```bash
+# 1. Obter o token
+curl -X POST http://127.0.0.1:5000/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@loja.com","senha":"<SEED_ADMIN_PASSWORD>"}'
+
+# 2. Usar nas requisições seguintes
+curl http://127.0.0.1:5000/usuarios -H "Authorization: Bearer <token>"
+```
+
+Usuários criados via `POST /usuarios` são sempre do tipo `cliente`; o campo
+`tipo` no payload é ignorado.
+
+## Endpoints
+
+| Método | Rota | Acesso |
+|--------|------|--------|
+| GET | `/` | Público |
+| GET | `/health` | Público |
+| GET | `/produtos` | Público |
+| GET | `/produtos/busca` | Público |
+| GET | `/produtos/<id>` | Público |
+| POST | `/produtos` | Admin |
+| PUT | `/produtos/<id>` | Admin |
+| DELETE | `/produtos/<id>` | Admin |
+| POST | `/usuarios` | Público |
+| POST | `/login` | Público |
+| GET | `/usuarios` | Admin |
+| GET | `/usuarios/<id>` | Próprio usuário ou admin |
+| POST | `/pedidos` | Autenticado |
+| GET | `/pedidos/<id>` | Dono do pedido ou admin |
+| GET | `/pedidos` | Admin |
+| GET | `/pedidos/usuario/<id>` | Próprio usuário ou admin |
+| PUT | `/pedidos/<id>/status` | Admin |
+| GET | `/relatorios/vendas` | Admin |
+
+Listagens aceitam `?limite=` (máx. 200) e `?offset=`.
 
 ## Arquitetura
 
 ```
-app.py                      # entry point (composition root fino)
+app.py                    Entry point
 src/
-├── app_factory.py          # create_app(): fiação das camadas
-├── config/
-│   ├── settings.py         # carrega .env; falha o boot se faltar SECRET_KEY em prod
-│   ├── database.py         # conexão por request (flask.g) + helper de transação
-│   ├── schema.py           # DDL com FK/UNIQUE/CHECK/índices + seed
-│   └── constants.py        # categorias, status, faixas de desconto, limites
-├── models/                 # entidades + serialização (Produto, Usuario, Pedido)
-├── repositories/           # SQL parametrizado, sem regra de negócio
-├── services/               # regra de negócio pura, sem HTTP
-├── controllers/            # tradução HTTP ↔ service
-├── routes/                 # blueprints: URL → controller + guarda de acesso
-├── middlewares/            # auth JWT, error handler global, logging
-├── schemas/                # validação declarativa de payloads
-└── utils/                  # exceções de domínio, bcrypt, JWT
+├── app_factory.py        Composition root
+├── config/               settings, database, schema, constants
+├── models/               Entidades (Produto, Usuario, Pedido)
+├── repositories/         Acesso a dados — SQL parametrizado
+├── services/             Regra de negócio
+├── controllers/          Orquestração HTTP
+├── routes/               Blueprints por domínio
+├── middlewares/          auth (JWT), error_handler, logging
+├── schemas/              Validação de entrada
+└── utils/                errors, security
+tests/                    Testes de integração
 ```
 
-Fluxo de uma request: `route → middleware de auth → controller → schema →
-service → repository → banco`. Erros sobem como exceções de domínio e o error
-handler global as traduz para o status HTTP correto.
+Fluxo de um request:
 
-## Autenticação
+```
+Route → Middleware de auth → Controller → Schema → Service → Repository → Model
+```
 
-`POST /login` devolve um JWT. Envie-o como `Authorization: Bearer <token>`.
+Regra de dependência: cada camada só conhece a camada imediatamente abaixo.
+Services não importam Flask; Repositories não conhecem regra de negócio.
 
-| Acesso | Endpoints |
-|---|---|
-| Público | `GET /`, `GET /health`, `GET /produtos*`, `POST /usuarios`, `POST /login` |
-| Autenticado | `GET /me`, `POST /pedidos`, `GET /pedidos/usuario/<id>` (só os próprios), `GET /usuarios/<id>` (só o próprio) |
-| Admin | `POST/PUT/DELETE /produtos`, `GET /usuarios`, `GET /pedidos`, `PUT /pedidos/<id>/status`, `GET /relatorios/vendas` |
+## Notas de segurança
 
-## O que mudou em relação ao legado
+- Senhas são armazenadas com **bcrypt** (custo 12) e nunca aparecem em respostas.
+- Todas as queries são **parametrizadas**; os curingas do `LIKE` são escapados.
+- Os endpoints `POST /admin/query` e `POST /admin/reset-db` foram **removidos**.
+- `SECRET_KEY` vem do ambiente e o boot falha se ela estiver ausente ou for curta.
+- CORS restrito às origens de `CORS_ORIGINS`.
+- `/health` expõe apenas status e conectividade do banco.
 
-**Segurança**
-- 16 queries com concatenação de strings → 100% parametrizadas (login bypass e
-  dump via `?q=' OR 1=1` deixaram de funcionar).
-- `POST /admin/query` (execução de SQL arbitrário sem auth) e `POST /admin/reset-db`
-  foram removidos.
-- Senhas em texto plano → bcrypt; login com comparação de tempo constante.
-- `SECRET_KEY` hardcoded → variável de ambiente, obrigatória em produção.
-- `/health` não devolve mais `secret_key`/`debug`/`db_path`; `GET /usuarios` não
-  devolve mais o campo `senha`.
-- JWT com `login_required`/`admin_required` e checagem de ownership em pedidos
-  (o IDOR de `/pedidos/usuario/<id>` foi fechado).
+## Migração a partir da versão anterior
 
-**Arquitetura**
-- `models.py` (315 linhas, 4 domínios) e `controllers.py` (293 linhas) → camadas
-  separadas por domínio.
-- Regra de negócio (desconto, total, estoque) saiu da camada de dados e do HTTP;
-  `calcular_desconto` é testável sem banco.
-- Conexão global compartilhada entre threads → conexão por request.
-
-**Correção e performance**
-- Listagem de pedidos: de `1 + N + (N × M)` queries para 2 queries com JOIN.
-- Criação de pedido em transação com débito atômico de estoque
-  (`UPDATE ... WHERE estoque >= ?`), eliminando a race condition.
-- Cancelamento agora devolve o estoque de fato (o legado só logava a intenção).
-- Schema com FOREIGN KEYs, `UNIQUE(email)`, `NOT NULL`, `CHECK` e índices.
-- Validação declarativa: input malformado retorna 400 em vez de 500.
-- `print()` → `logging`; `except Exception` por endpoint → error handler global.
-- Paginação (`?pagina=&por_pagina=`) em todas as listagens.
-
-O banco legado foi preservado em `loja.db.legacy.bak` — o schema antigo e as
-senhas em texto plano são incompatíveis com o novo formato.
+O schema mudou: a coluna `usuarios.senha` (texto plano) virou `usuarios.senha_hash`,
+e foram adicionadas constraints e foreign keys. Um `loja.db` gerado pela versão
+antiga **não é compatível** — apague-o e deixe a aplicação recriá-lo, ou escreva
+uma migração que force a redefinição de senha de todos os usuários (os hashes não
+podem ser derivados das senhas antigas sem conhecê-las... que, no caso, estavam
+todas em claro no banco e devem ser consideradas comprometidas).

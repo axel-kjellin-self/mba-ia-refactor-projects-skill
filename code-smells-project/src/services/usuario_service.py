@@ -1,22 +1,48 @@
-"""Regras de negócio de usuário (consulta; cadastro fica em auth_service)."""
+"""Regras de negócio de usuários."""
 
-from src.config.constants import ITENS_POR_PAGINA_PADRAO, PAGINA_PADRAO
-from src.repositories import usuario_repository
-from src.utils.errors import NotFoundError
+import sqlite3
 
-
-def listar(pagina: int = PAGINA_PADRAO, por_pagina: int = ITENS_POR_PAGINA_PADRAO) -> dict:
-    usuarios = usuario_repository.listar(por_pagina, (pagina - 1) * por_pagina)
-    return {
-        "itens": [usuario.to_dict() for usuario in usuarios],
-        "pagina": pagina,
-        "por_pagina": por_pagina,
-        "total": usuario_repository.contar(),
-    }
+from src.config.constants import TipoUsuario
+from src.config.database import transacao
+from src.models.usuario import Usuario
+from src.repositories.usuario_repository import UsuarioRepository
+from src.schemas.usuario_schema import UsuarioInput
+from src.utils.errors import ConflictError, NotFoundError
+from src.utils.security import hash_senha
 
 
-def buscar(usuario_id: int) -> dict:
-    usuario = usuario_repository.buscar_por_id(usuario_id)
-    if usuario is None:
-        raise NotFoundError("Usuário não encontrado")
-    return usuario.to_dict()
+class UsuarioService:
+    def __init__(self, repositorio: UsuarioRepository | None = None) -> None:
+        self.repositorio = repositorio or UsuarioRepository()
+
+    def listar(self, limite: int, offset: int = 0) -> list[Usuario]:
+        return self.repositorio.listar(limite, offset)
+
+    def buscar(self, usuario_id: int) -> Usuario:
+        usuario = self.repositorio.buscar_por_id(usuario_id)
+        if usuario is None:
+            raise NotFoundError(f"Usuário {usuario_id} não encontrado.")
+        return usuario
+
+    def criar(self, entrada: UsuarioInput) -> Usuario:
+        """Cadastra um usuário sempre como cliente.
+
+        O papel nunca vem do payload: aceitar ``tipo`` do cliente permitiria
+        auto-promoção a admin.
+        """
+        if self.repositorio.email_existe(entrada.email):
+            raise ConflictError("E-mail já cadastrado.")
+
+        try:
+            with transacao():
+                usuario_id = self.repositorio.criar(
+                    entrada.nome,
+                    entrada.email,
+                    hash_senha(entrada.senha),
+                    TipoUsuario.CLIENTE,
+                )
+        except sqlite3.IntegrityError as exc:
+            # Corrida entre a checagem acima e o INSERT: a constraint UNIQUE decide.
+            raise ConflictError("E-mail já cadastrado.") from exc
+
+        return self.buscar(usuario_id)

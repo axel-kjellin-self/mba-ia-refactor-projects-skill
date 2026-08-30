@@ -1,9 +1,21 @@
+# Segredos — nunca versionar
 .env
+
+# Banco de dados local
 *.db
-*.db.bak
-*.db.legacy.bak
+*.db-journal
+*.sqlite3
+
+# Python
 __pycache__/
 *.py[cod]
 .venv/
 venv/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Editores
+.vscode/
+.idea/

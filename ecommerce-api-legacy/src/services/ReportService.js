@@ -1,73 +1,57 @@
-const EnrollmentRepository = require('../repositories/EnrollmentRepository');
-const { PAYMENT_STATUS } = require('../config/constants');
+const { PaymentStatus } = require('../config/constants');
 
 /**
- * Report Service
- * Handles business logic for generating reports
+ * Monta o relatório financeiro a partir de uma única query com JOINs,
+ * agrupando as linhas em memória.
+ *
+ * O código legado fazia queries aninhadas dentro de dois `forEach` e controlava
+ * a conclusão com contadores manuais (`coursesPending`/`enrPending`) — além do
+ * N+1, isso quebrava quando um curso não tinha matrículas.
  */
 class ReportService {
-    /**
-     * Generate financial report with optimized query (no N+1 problem)
-     * @returns {Promise<Array>} Report grouped by course
-     */
-    async generateFinancialReport() {
-        // Use optimized JOIN query from repository
-        const data = await EnrollmentRepository.getFinancialReportData();
-
-        // Group by course
-        const coursesMap = new Map();
-
-        for (const row of data) {
-            const courseId = row.course_id;
-
-            if (!coursesMap.has(courseId)) {
-                coursesMap.set(courseId, {
-                    course: row.course_title,
-                    revenue: 0,
-                    students: []
-                });
-            }
-
-            const courseData = coursesMap.get(courseId);
-
-            // Add revenue if payment was successful
-            if (row.payment_status === PAYMENT_STATUS.PAID) {
-                courseData.revenue += row.payment_amount || 0;
-            }
-
-            // Add student if exists (might be null for courses with no enrollments)
-            if (row.student_name) {
-                courseData.students.push({
-                    student: row.student_name,
-                    email: row.student_email,
-                    paid: row.payment_amount || 0,
-                    status: row.payment_status || 'N/A'
-                });
-            }
-        }
-
-        // Convert map to array
-        return Array.from(coursesMap.values());
+    constructor(reportRepository) {
+        this.reportRepository = reportRepository;
     }
 
     /**
-     * Get revenue summary
-     * @returns {Promise<Object>} Total revenue and course count
+     * @returns {Promise<Array<{course: string, revenue: number, students: Array}>>}
      */
-    async getRevenueSummary() {
-        const report = await this.generateFinancialReport();
+    async buildFinancialReport() {
+        const rows = await this.reportRepository.findFinancialRows();
 
-        const totalRevenue = report.reduce((sum, course) => sum + course.revenue, 0);
-        const totalCourses = report.length;
-        const totalStudents = report.reduce((sum, course) => sum + course.students.length, 0);
+        const byCourse = new Map();
 
-        return {
-            totalRevenue,
-            totalCourses,
-            totalStudents,
-            averageRevenuePerCourse: totalCourses > 0 ? totalRevenue / totalCourses : 0
-        };
+        for (const row of rows) {
+            if (!byCourse.has(row.course_id)) {
+                byCourse.set(row.course_id, {
+                    course: row.course_title,
+                    revenue: 0,
+                    students: [],
+                });
+            }
+
+            const entry = byCourse.get(row.course_id);
+
+            // LEFT JOIN: cursos sem matrícula geram uma linha com enrollment nulo.
+            if (row.enrollment_id === null) continue;
+
+            if (row.payment_status === PaymentStatus.PAID) {
+                entry.revenue += row.payment_amount;
+            }
+
+            entry.students.push({
+                student: row.student_name,
+                paid: row.payment_amount ?? 0,
+                status: row.payment_status ?? null,
+            });
+        }
+
+        return Array.from(byCourse.values()).map((entry) => ({
+            ...entry,
+            // Evita ruído de ponto flutuante ao somar valores monetários.
+            revenue: Number(entry.revenue.toFixed(2)),
+        }));
     }
 }
 
-module.exports = new ReportService();
+module.exports = ReportService;

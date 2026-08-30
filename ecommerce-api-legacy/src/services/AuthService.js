@@ -1,107 +1,69 @@
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const UserRepository = require('../repositories/UserRepository');
-const User = require('../models/User');
-const config = require('../config/index');
+
+const { config } = require('../config');
+const { Security } = require('../config/constants');
+const { UnauthorizedError } = require('../utils/errors');
 
 /**
- * Authentication Service
- * Handles user authentication and JWT token generation
+ * Autenticação e hashing de senhas.
+ *
+ * Substitui `badCrypto()`, que concatenava base64 e truncava em 10 caracteres —
+ * sem salt e trivialmente reversível. Agora: bcrypt com salt automático.
  */
 class AuthService {
+    constructor(userRepository) {
+        this.userRepository = userRepository;
+    }
+
+    hashPassword(plainPassword) {
+        return bcrypt.hash(plainPassword, Security.BCRYPT_SALT_ROUNDS);
+    }
+
+    verifyPassword(plainPassword, hash) {
+        return bcrypt.compare(plainPassword, hash);
+    }
+
     /**
-     * Authenticate user and generate JWT token
-     * @param {string} email - User email
-     * @param {string} password - User password (plaintext)
-     * @returns {Promise<Object>} { user, token }
-     * @throws {Error} If authentication fails
+     * Valida credenciais e emite um JWT.
+     * @throws {UnauthorizedError} credenciais inválidas
      */
     async login(email, password) {
-        // Find user by email
-        const user = await UserRepository.findByEmail(email);
+        const user = await this.userRepository.findByEmailWithPassword(email);
 
-        if (!user) {
-            throw new Error('Invalid credentials');
+        // Mensagem genérica em ambos os casos: distinguir "email não existe" de
+        // "senha errada" permite enumeração de usuários.
+        const isValid = user && (await this.verifyPassword(password, user.pass));
+        if (!isValid) {
+            throw new UnauthorizedError('Credenciais inválidas');
         }
-
-        // Verify password
-        const isPasswordValid = await User.comparePassword(password, user.password);
-
-        if (!isPasswordValid) {
-            throw new Error('Invalid credentials');
-        }
-
-        // Generate JWT token
-        const token = this.generateToken(user);
 
         return {
-            user: user.toJSON(),
-            token
+            token: this.issueToken(user),
+            user: { id: user.id, name: user.name, email: user.email, role: user.role },
         };
     }
 
-    /**
-     * Generate JWT token for user
-     * @param {User} user
-     * @returns {string} JWT token
-     */
-    generateToken(user) {
-        const payload = {
-            userId: user.id,
-            email: user.email,
-            role: user.role
-        };
-
-        return jwt.sign(payload, config.jwt.secret, {
-            expiresIn: config.jwt.expiresIn
-        });
+    issueToken(user) {
+        return jwt.sign(
+            { sub: user.id, role: user.role },
+            config.jwt.secret,
+            { expiresIn: config.jwt.expiresIn, algorithm: Security.JWT_ALGORITHM }
+        );
     }
 
-    /**
-     * Verify and decode JWT token
-     * @param {string} token
-     * @returns {Object} Decoded token payload
-     * @throws {Error} If token is invalid
-     */
+    /** @throws {UnauthorizedError} token ausente, expirado ou adulterado */
     verifyToken(token) {
         try {
-            return jwt.verify(token, config.jwt.secret);
-        } catch (error) {
-            throw new Error('Invalid or expired token');
+            return jwt.verify(token, config.jwt.secret, {
+                algorithms: [Security.JWT_ALGORITHM],
+            });
+        } catch (err) {
+            const message =
+                err.name === 'TokenExpiredError' ? 'Token expirado' : 'Token inválido';
+            throw new UnauthorizedError(message);
         }
-    }
-
-    /**
-     * Register a new user
-     * @param {Object} userData - { name, email, password }
-     * @returns {Promise<Object>} { user, token }
-     */
-    async register(userData) {
-        // Check if user already exists
-        const existingUser = await UserRepository.findByEmail(userData.email);
-
-        if (existingUser) {
-            throw new Error('User with this email already exists');
-        }
-
-        // Hash password
-        const hashedPassword = await User.hashPassword(userData.password);
-
-        // Create user
-        const user = await UserRepository.create({
-            name: userData.name,
-            email: userData.email,
-            password: hashedPassword,
-            role: userData.role || 'user'
-        });
-
-        // Generate token
-        const token = this.generateToken(user);
-
-        return {
-            user: user.toJSON(),
-            token
-        };
     }
 }
 
-module.exports = new AuthService();
+module.exports = AuthService;

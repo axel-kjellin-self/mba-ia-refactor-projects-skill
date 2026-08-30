@@ -1,17 +1,19 @@
-"""Rotas de pedido."""
+"""Rotas de pedidos. Todas exigem autenticação."""
 
 from flask import Blueprint
 
-from src.controllers import pedido_controller
-from src.middlewares.auth import admin_required, login_required
+from src.controllers.pedido_controller import PedidoController
+from src.middlewares.auth import require_admin, require_auth, require_self_or_admin
 
 pedido_bp = Blueprint("pedidos", __name__, url_prefix="/pedidos")
+_controller = PedidoController()
 
-pedido_bp.post("")(login_required(pedido_controller.criar_pedido))
-pedido_bp.get("")(admin_required(pedido_controller.listar_todos_pedidos))
+pedido_bp.post("")(require_auth(_controller.criar))
+pedido_bp.get("/<int:pedido_id>")(require_auth(_controller.buscar))
+
+pedido_bp.get("")(require_admin(_controller.listar_todos))
+pedido_bp.put("/<int:pedido_id>/status")(require_admin(_controller.atualizar_status))
+
 pedido_bp.get("/usuario/<int:usuario_id>")(
-    login_required(pedido_controller.listar_pedidos_usuario)
-)
-pedido_bp.put("/<int:pedido_id>/status")(
-    admin_required(pedido_controller.atualizar_status_pedido)
+    require_self_or_admin("usuario_id")(_controller.listar_por_usuario)
 )

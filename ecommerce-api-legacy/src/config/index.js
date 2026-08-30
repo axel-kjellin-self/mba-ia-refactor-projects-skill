@@ -1,41 +1,60 @@
 require('dotenv').config();
 
+const { Security } = require('./constants');
+
+/**
+ * Configuração da aplicação, carregada exclusivamente de variáveis de ambiente.
+ * Nenhum secret é hardcoded — ver `.env.example` para o contrato esperado.
+ */
 const config = {
-    port: process.env.PORT || 3000,
-    nodeEnv: process.env.NODE_ENV || 'development',
+    env: process.env.NODE_ENV || 'development',
+    port: Number(process.env.PORT) || 3000,
 
-    // Database
-    db: {
-        user: process.env.DB_USER || 'admin_master',
-        password: process.env.DB_PASSWORD
+    database: {
+        file: process.env.DATABASE_FILE || ':memory:',
     },
 
-    // Payment Gateway
-    paymentGatewayKey: process.env.PAYMENT_GATEWAY_KEY,
-
-    // SMTP
-    smtp: {
-        user: process.env.SMTP_USER
-    },
-
-    // JWT
     jwt: {
         secret: process.env.JWT_SECRET,
-        expiresIn: process.env.JWT_EXPIRES_IN || '24h'
+        expiresIn: process.env.JWT_EXPIRES_IN || '1h',
     },
 
-    // Validate required environment variables
-    validate() {
-        const required = ['JWT_SECRET', 'PAYMENT_GATEWAY_KEY'];
-        const missing = required.filter(key => !process.env[key]);
+    payment: {
+        gatewayKey: process.env.PAYMENT_GATEWAY_KEY,
+    },
 
-        if (missing.length > 0) {
-            throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
-        }
-    }
+    smtp: {
+        user: process.env.SMTP_USER,
+    },
+
+    seed: {
+        adminEmail: process.env.SEED_ADMIN_EMAIL,
+        adminPassword: process.env.SEED_ADMIN_PASSWORD,
+    },
 };
 
-// Validate on load
-config.validate();
+config.isProduction = config.env === 'production';
 
-module.exports = config;
+/**
+ * Falha rápido no boot se a configuração obrigatória estiver ausente ou fraca,
+ * em vez de descobrir o problema no primeiro request.
+ */
+function validate() {
+    const required = ['JWT_SECRET', 'PAYMENT_GATEWAY_KEY'];
+    const missing = required.filter((key) => !process.env[key]);
+
+    if (missing.length > 0) {
+        throw new Error(
+            `Variáveis de ambiente obrigatórias ausentes: ${missing.join(', ')}. ` +
+            'Copie .env.example para .env e preencha os valores.'
+        );
+    }
+
+    if (config.jwt.secret.length < Security.MIN_JWT_SECRET_LENGTH) {
+        throw new Error(
+            `JWT_SECRET deve ter no mínimo ${Security.MIN_JWT_SECRET_LENGTH} caracteres.`
+        );
+    }
+}
+
+module.exports = { config, validate };

@@ -1,52 +1,61 @@
 """Exceções de domínio.
 
-Os services levantam estas exceções sem conhecer HTTP; o error handler global
-as traduz para o status code correto. Isso substitui os ``except Exception`` que
-devolviam 500 (e a mensagem interna) para qualquer falha.
+Permitem que services sinalizem falhas sem conhecer HTTP. O mapeamento para
+status codes acontece em ``middlewares/error_handler.py``.
+
+Substitui o padrão anterior de retornar ``{"erro": ...}`` como valor de
+retorno, que obrigava o chamador a inspecionar o dicionário para saber se a
+operação falhou.
 """
 
 
 class AppError(Exception):
-    """Erro de aplicação previsto, com status HTTP associado."""
+    """Erro de aplicação com status HTTP associado."""
 
-    status_code = 500
-    mensagem_padrao = "Erro interno"
+    status_code: int = 400
 
-    def __init__(self, mensagem: str = "", detalhes: dict | None = None):
-        super().__init__(mensagem or self.mensagem_padrao)
-        self.mensagem = mensagem or self.mensagem_padrao
-        self.detalhes = detalhes or {}
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.message = message
+        if status_code is not None:
+            self.status_code = status_code
 
 
 class ValidationError(AppError):
+    """Entrada malformada ou fora das regras de validação."""
+
     status_code = 400
-    mensagem_padrao = "Dados inválidos"
+
+    def __init__(self, message: str, fields: dict[str, str] | None = None) -> None:
+        super().__init__(message)
+        self.fields = fields or {}
 
 
 class UnauthorizedError(AppError):
+    """Credenciais ausentes ou inválidas."""
+
     status_code = 401
-    mensagem_padrao = "Autenticação necessária"
 
 
 class ForbiddenError(AppError):
+    """Autenticado, mas sem permissão para o recurso."""
+
     status_code = 403
-    mensagem_padrao = "Acesso negado"
 
 
 class NotFoundError(AppError):
+    """Recurso inexistente."""
+
     status_code = 404
-    mensagem_padrao = "Recurso não encontrado"
 
 
 class ConflictError(AppError):
-    """Estado atual do recurso impede a operação (ex.: email já cadastrado)."""
+    """Violação de unicidade ou de estado (ex.: email já cadastrado)."""
 
     status_code = 409
-    mensagem_padrao = "Conflito com o estado atual do recurso"
 
 
 class BusinessRuleError(AppError):
     """Regra de negócio violada (ex.: estoque insuficiente)."""
 
     status_code = 422
-    mensagem_padrao = "Operação não permitida pelas regras de negócio"

@@ -1,34 +1,29 @@
 /**
- * Application constants
- * Extract magic numbers and strings to named constants
+ * Constantes de domínio. Centralizadas para eliminar magic numbers/strings
+ * espalhados pelo código.
  */
 
-const CARD_PREFIXES = {
-    VISA: '4',
-    MASTERCARD: '5',
-    AMEX: '3'
-};
-
-const PAYMENT_STATUS = {
+const PaymentStatus = Object.freeze({
     PAID: 'PAID',
     DENIED: 'DENIED',
-    PENDING: 'PENDING'
-};
+});
 
-const COURSE_STATUS = {
-    ACTIVE: 1,
-    INACTIVE: 0
-};
+const Roles = Object.freeze({
+    ADMIN: 'admin',
+    USER: 'user',
+});
 
-const VALIDATION_RULES = {
+const ValidationRules = Object.freeze({
     MIN_PASSWORD_LENGTH: 12,
     MAX_NAME_LENGTH: 100,
-    MAX_TITLE_LENGTH: 200
-};
+    MIN_CARD_DIGITS: 13,
+    MAX_CARD_DIGITS: 19,
+});
 
-module.exports = {
-    CARD_PREFIXES,
-    PAYMENT_STATUS,
-    COURSE_STATUS,
-    VALIDATION_RULES
-};
+const Security = Object.freeze({
+    BCRYPT_SALT_ROUNDS: 12,
+    JWT_ALGORITHM: 'HS256',
+    MIN_JWT_SECRET_LENGTH: 32,
+});
+
+module.exports = { PaymentStatus, Roles, ValidationRules, Security };

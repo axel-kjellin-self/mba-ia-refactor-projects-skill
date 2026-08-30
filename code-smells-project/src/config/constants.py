@@ -1,51 +1,91 @@
-"""Constantes de domínio — substituem os magic numbers espalhados pelo código legado."""
+"""Constantes de domínio.
 
-CATEGORIAS_VALIDAS = (
-    "informatica",
-    "moveis",
-    "vestuario",
-    "geral",
-    "eletronicos",
-    "livros",
-)
-CATEGORIA_PADRAO = "geral"
+Centraliza os valores que antes apareciam como literais espalhados em
+``models.py`` (faixas de desconto) e ``controllers.py`` (categorias, status,
+limites de tamanho).
+"""
 
-STATUS_PENDENTE = "pendente"
-STATUS_APROVADO = "aprovado"
-STATUS_ENVIADO = "enviado"
-STATUS_ENTREGUE = "entregue"
-STATUS_CANCELADO = "cancelado"
-STATUS_PEDIDO_VALIDOS = (
-    STATUS_PENDENTE,
-    STATUS_APROVADO,
-    STATUS_ENVIADO,
-    STATUS_ENTREGUE,
-    STATUS_CANCELADO,
-)
+from typing import Final
 
-TIPO_CLIENTE = "cliente"
-TIPO_ADMIN = "admin"
-TIPOS_USUARIO_VALIDOS = (TIPO_CLIENTE, TIPO_ADMIN)
 
-# Faixas de desconto sobre o faturamento: (valor mínimo exclusivo, percentual).
-# Avaliadas da maior para a menor; a primeira que se aplica vence.
-FAIXAS_DESCONTO_FATURAMENTO = (
-    (10_000.0, 0.10),
-    (5_000.0, 0.05),
-    (1_000.0, 0.02),
-)
+class Categoria:
+    """Categorias aceitas para um produto."""
 
-NOME_PRODUTO_TAMANHO_MINIMO = 2
-NOME_PRODUTO_TAMANHO_MAXIMO = 200
-NOME_USUARIO_TAMANHO_MINIMO = 2
-NOME_USUARIO_TAMANHO_MAXIMO = 120
-SENHA_TAMANHO_MINIMO = 12
-SENHA_TAMANHO_MAXIMO = 128
-QUANTIDADE_MAXIMA_POR_ITEM = 1_000
-ITENS_MAXIMOS_POR_PEDIDO = 100
+    VALIDAS: Final[tuple[str, ...]] = (
+        "informatica",
+        "moveis",
+        "vestuario",
+        "geral",
+        "eletronicos",
+        "livros",
+    )
+    PADRAO: Final[str] = "geral"
 
-PAGINA_PADRAO = 1
-ITENS_POR_PAGINA_PADRAO = 50
-ITENS_POR_PAGINA_MAXIMO = 200
 
-CASAS_DECIMAIS_MONETARIAS = 2
+class StatusPedido:
+    """Ciclo de vida de um pedido."""
+
+    PENDENTE: Final[str] = "pendente"
+    APROVADO: Final[str] = "aprovado"
+    ENVIADO: Final[str] = "enviado"
+    ENTREGUE: Final[str] = "entregue"
+    CANCELADO: Final[str] = "cancelado"
+
+    VALIDOS: Final[tuple[str, ...]] = (
+        PENDENTE,
+        APROVADO,
+        ENVIADO,
+        ENTREGUE,
+        CANCELADO,
+    )
+
+
+class TipoUsuario:
+    """Papéis de usuário usados na autorização."""
+
+    ADMIN: Final[str] = "admin"
+    CLIENTE: Final[str] = "cliente"
+
+    VALIDOS: Final[tuple[str, ...]] = (ADMIN, CLIENTE)
+
+
+class FaixaDesconto:
+    """Faixas progressivas de desconto sobre o faturamento bruto.
+
+    Avaliadas da maior para a menor; a primeira faixa atingida define a taxa.
+    """
+
+    FAIXAS: Final[tuple[tuple[float, float], ...]] = (
+        (10_000.0, 0.10),
+        (5_000.0, 0.05),
+        (1_000.0, 0.02),
+    )
+
+
+class RegrasValidacao:
+    """Limites de validação de entrada."""
+
+    NOME_PRODUTO_MIN: Final[int] = 2
+    NOME_PRODUTO_MAX: Final[int] = 200
+    DESCRICAO_MAX: Final[int] = 1_000
+
+    NOME_USUARIO_MIN: Final[int] = 2
+    NOME_USUARIO_MAX: Final[int] = 120
+    EMAIL_MAX: Final[int] = 254
+
+    # Elevado dos 0 caracteres efetivos do código original.
+    SENHA_MIN: Final[int] = 12
+    SENHA_MAX: Final[int] = 128
+
+    PRECO_MAX: Final[float] = 1_000_000.0
+    ESTOQUE_MAX: Final[int] = 1_000_000
+    QUANTIDADE_MAX: Final[int] = 1_000
+
+    ITENS_PEDIDO_MAX: Final[int] = 100
+
+
+class Paginacao:
+    """Limites de paginação das listagens."""
+
+    LIMITE_PADRAO: Final[int] = 50
+    LIMITE_MAX: Final[int] = 200

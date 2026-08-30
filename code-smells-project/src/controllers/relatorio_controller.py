@@ -1,16 +1,21 @@
-"""Controllers de relatórios e health check."""
+"""Controller HTTP de relatórios e health check."""
 
 from flask import jsonify
 
-from src.controllers.http import sucesso
-from src.services import relatorio_service
+from src.controllers import http
+from src.services.relatorio_service import RelatorioService
 
 
-def relatorio_vendas():
-    return sucesso(relatorio_service.gerar_relatorio_de_vendas())
+class RelatorioController:
+    def __init__(self, servico: RelatorioService | None = None) -> None:
+        self.servico = servico or RelatorioService()
 
+    def vendas(self):
+        """GET /relatorios/vendas — restrito a administradores."""
+        return http.ok(self.servico.vendas())
 
-def health_check():
-    # Resposta enxuta e sem secrets: o legado devolvia SECRET_KEY, db_path e o
-    # flag de debug para qualquer chamador anônimo.
-    return jsonify(relatorio_service.status_da_aplicacao()), 200
+    def health(self):
+        """GET /health — endpoint público, sem dados sensíveis."""
+        resultado = self.servico.health()
+        status_http = 200 if resultado["status"] == "ok" else 503
+        return jsonify(resultado), status_http

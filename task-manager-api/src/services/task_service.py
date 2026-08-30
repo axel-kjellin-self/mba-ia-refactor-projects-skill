@@ -1,202 +1,125 @@
-from src.models.task import Task
-from src.models.user import User
-from src.models.category import Category
-from src.config.database import db
-from datetime import datetime
-from sqlalchemy.orm import joinedload
+"""Regras de negócio de tasks. Sem dependência de Flask/HTTP."""
 import logging
+
+from src.config.constants import TaskStatus
+from src.config.database import db
+from src.models.task import TAG_SEPARATOR, Task
+from src.repositories.category_repository import CategoryRepository
+from src.repositories.task_repository import TaskRepository
+from src.repositories.user_repository import UserRepository
+from src.utils.exceptions import NotFoundError
 
 logger = logging.getLogger(__name__)
 
 
 class TaskService:
-    """Task business logic"""
+    def __init__(
+        self,
+        task_repository: TaskRepository | None = None,
+        user_repository: UserRepository | None = None,
+        category_repository: CategoryRepository | None = None,
+    ) -> None:
+        self.task_repository = task_repository or TaskRepository()
+        self.user_repository = user_repository or UserRepository()
+        self.category_repository = category_repository or CategoryRepository()
 
-    @staticmethod
-    def get_all_tasks():
-        """
-        Get all tasks with eager loading to avoid N+1
-        """
-        tasks = Task.query.options(
-            joinedload(Task.user),
-            joinedload(Task.category)
-        ).all()
+    def list_tasks(self) -> list[Task]:
+        return self.task_repository.list_all()
 
-        result = []
-        for task in tasks:
-            task_data = task.to_dict()
-
-            # Add user info if exists
-            if task.user:
-                task_data['user_name'] = task.user.name
-            else:
-                task_data['user_name'] = None
-
-            # Add category info if exists
-            if task.category:
-                task_data['category_name'] = task.category.name
-            else:
-                task_data['category_name'] = None
-
-            result.append(task_data)
-
-        return result
-
-    @staticmethod
-    def get_task_by_id(task_id):
-        """Get task by ID"""
-        task = Task.query.get(task_id)
-        if not task:
-            raise ValueError(f"Task {task_id} not found")
+    def get_task(self, task_id: int) -> Task:
+        task = self.task_repository.find_by_id(task_id)
+        if task is None:
+            raise NotFoundError('Task não encontrada')
         return task
 
-    @staticmethod
-    def create_task(data):
-        """
-        Create new task
+    def search_tasks(self, filters: dict) -> list[Task]:
+        return self.task_repository.search(
+            term=filters.get('q'),
+            status=filters.get('status'),
+            priority=filters.get('priority'),
+            user_id=filters.get('user_id'),
+        )
 
-        Args:
-            data: dict with task fields
+    def create_task(self, data: dict) -> Task:
+        self._assert_relations_exist(data.get('user_id'), data.get('category_id'))
 
-        Returns:
-            Created Task object
+        task = Task(
+            title=data['title'],
+            description=data.get('description') or '',
+            status=data['status'],
+            priority=data['priority'],
+            user_id=data.get('user_id'),
+            category_id=data.get('category_id'),
+            due_date=data.get('due_date'),
+            tags=self._join_tags(data.get('tags')),
+        )
 
-        Raises:
-            ValueError: If validation fails
-        """
-        # Validate user exists
-        if data.get('user_id'):
-            user = User.query.get(data['user_id'])
-            if not user:
-                raise ValueError(f"User {data['user_id']} not found")
+        self.task_repository.add(task)
+        db.session.commit()
+        logger.info('Task criada: id=%s title=%r', task.id, task.title)
+        return task
 
-        # Validate category exists
-        if data.get('category_id'):
-            category = Category.query.get(data['category_id'])
-            if not category:
-                raise ValueError(f"Category {data['category_id']} not found")
+    def update_task(self, task_id: int, data: dict) -> Task:
+        task = self.get_task(task_id)
 
-        # Handle tags (convert list to string)
-        if 'tags' in data and isinstance(data['tags'], list):
-            data['tags'] = ','.join(data['tags'])
+        self._assert_relations_exist(
+            data.get('user_id') if 'user_id' in data else None,
+            data.get('category_id') if 'category_id' in data else None,
+        )
 
-        task = Task(**data)
+        for field in ('title', 'description', 'status', 'priority', 'user_id',
+                      'category_id', 'due_date'):
+            if field in data:
+                setattr(task, field, data[field])
 
-        try:
-            db.session.add(task)
-            db.session.commit()
-            logger.info(f"Task created: {task.id} - {task.title}")
-            return task
+        if 'tags' in data:
+            task.tags = self._join_tags(data['tags'])
 
-        except Exception as e:
-            db.session.rollback()
-            logger.error(f"Error creating task: {e}", exc_info=True)
-            raise
+        db.session.commit()
+        logger.info('Task atualizada: id=%s', task.id)
+        return task
 
-    @staticmethod
-    def update_task(task_id, data):
-        """Update task"""
-        task = Task.query.get(task_id)
-        if not task:
-            raise ValueError(f"Task {task_id} not found")
+    def delete_task(self, task_id: int) -> None:
+        task = self.get_task(task_id)
+        self.task_repository.delete(task)
+        db.session.commit()
+        logger.info('Task deletada: id=%s', task_id)
 
-        # Validate user if being updated
-        if 'user_id' in data and data['user_id']:
-            user = User.query.get(data['user_id'])
-            if not user:
-                raise ValueError(f"User {data['user_id']} not found")
+    def get_stats(self) -> dict:
+        """Estatísticas globais — agregações no banco, não em Python."""
+        total = self.task_repository.count()
+        by_status = self.task_repository.count_by_status()
+        done = by_status[TaskStatus.DONE.value]
 
-        # Validate category if being updated
-        if 'category_id' in data and data['category_id']:
-            category = Category.query.get(data['category_id'])
-            if not category:
-                raise ValueError(f"Category {data['category_id']} not found")
-
-        # Handle tags
-        if 'tags' in data and isinstance(data['tags'], list):
-            data['tags'] = ','.join(data['tags'])
-
-        # Update fields
-        for key, value in data.items():
-            if hasattr(task, key):
-                setattr(task, key, value)
-
-        task.updated_at = datetime.utcnow()
-
-        try:
-            db.session.commit()
-            logger.info(f"Task updated: {task.id}")
-            return task
-
-        except Exception as e:
-            db.session.rollback()
-            logger.error(f"Error updating task: {e}", exc_info=True)
-            raise
-
-    @staticmethod
-    def delete_task(task_id):
-        """Delete task"""
-        task = Task.query.get(task_id)
-        if not task:
-            raise ValueError(f"Task {task_id} not found")
-
-        try:
-            db.session.delete(task)
-            db.session.commit()
-            logger.info(f"Task deleted: {task_id}")
-
-        except Exception as e:
-            db.session.rollback()
-            logger.error(f"Error deleting task: {e}", exc_info=True)
-            raise
-
-    @staticmethod
-    def search_tasks(query=None, status=None, priority=None, user_id=None):
-        """Search tasks with filters"""
-        tasks_query = Task.query
-
-        if query:
-            # Sanitize LIKE query
-            sanitized_query = query.replace('%', '\\%').replace('_', '\\_')
-            tasks_query = tasks_query.filter(
-                db.or_(
-                    Task.title.like(f'%{sanitized_query}%'),
-                    Task.description.like(f'%{sanitized_query}%')
-                )
-            )
-
-        if status:
-            tasks_query = tasks_query.filter(Task.status == status)
-
-        if priority:
-            tasks_query = tasks_query.filter(Task.priority == int(priority))
-
-        if user_id:
-            tasks_query = tasks_query.filter(Task.user_id == int(user_id))
-
-        return tasks_query.all()
-
-    @staticmethod
-    def get_task_stats():
-        """Get task statistics"""
-        total = Task.query.count()
-        pending = Task.query.filter_by(status='pending').count()
-        in_progress = Task.query.filter_by(status='in_progress').count()
-        done = Task.query.filter_by(status='done').count()
-        cancelled = Task.query.filter_by(status='cancelled').count()
-
-        # Count overdue tasks
-        all_tasks = Task.query.all()
-        overdue_count = sum(1 for task in all_tasks if task.is_overdue)
-
-        stats = {
+        return {
             'total': total,
-            'pending': pending,
-            'in_progress': in_progress,
+            'pending': by_status[TaskStatus.PENDING.value],
+            'in_progress': by_status[TaskStatus.IN_PROGRESS.value],
             'done': done,
-            'cancelled': cancelled,
-            'overdue': overdue_count,
-            'completion_rate': round((done / total) * 100, 2) if total > 0 else 0
+            'cancelled': by_status[TaskStatus.CANCELLED.value],
+            'overdue': len(self.task_repository.list_overdue()),
+            'completion_rate': self.completion_rate(done, total),
         }
 
-        return stats
+    @staticmethod
+    def completion_rate(completed: int, total: int) -> float:
+        """Percentual de conclusão. Regra centralizada, antes duplicada 3x."""
+        if total <= 0:
+            return 0
+        return round((completed / total) * 100, 2)
+
+    def _assert_relations_exist(self, user_id: int | None, category_id: int | None) -> None:
+        """Valida FKs antes de gravar, para não criar registros órfãos."""
+        if user_id is not None and self.user_repository.find_by_id(user_id) is None:
+            raise NotFoundError('Usuário não encontrado')
+        if category_id is not None and self.category_repository.find_by_id(category_id) is None:
+            raise NotFoundError('Categoria não encontrada')
+
+    @staticmethod
+    def _join_tags(tags) -> str | None:
+        if tags is None:
+            return None
+        if isinstance(tags, str):
+            tags = tags.split(TAG_SEPARATOR)
+        cleaned = [tag.strip() for tag in tags if tag and tag.strip()]
+        return TAG_SEPARATOR.join(cleaned) if cleaned else None

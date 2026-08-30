@@ -1,16 +1,20 @@
-"""Rotas de produto. A camada de rota só mapeia URL → controller + guarda de acesso."""
+"""Rotas de produtos.
+
+Leitura é pública; escrita exige papel de administrador.
+"""
 
 from flask import Blueprint
 
-from src.controllers import produto_controller
-from src.middlewares.auth import admin_required
+from src.controllers.produto_controller import ProdutoController
+from src.middlewares.auth import require_admin
 
 produto_bp = Blueprint("produtos", __name__, url_prefix="/produtos")
+_controller = ProdutoController()
 
-# Leitura é pública (catálogo); escrita exige administrador.
-produto_bp.get("")(produto_controller.listar_produtos)
-produto_bp.get("/busca")(produto_controller.buscar_produtos)
-produto_bp.get("/<int:produto_id>")(produto_controller.buscar_produto)
-produto_bp.post("")(admin_required(produto_controller.criar_produto))
-produto_bp.put("/<int:produto_id>")(admin_required(produto_controller.atualizar_produto))
-produto_bp.delete("/<int:produto_id>")(admin_required(produto_controller.deletar_produto))
+produto_bp.get("")(_controller.listar)
+produto_bp.get("/busca")(_controller.pesquisar)
+produto_bp.get("/<int:id>")(_controller.buscar)
+
+produto_bp.post("")(require_admin(_controller.criar))
+produto_bp.put("/<int:id>")(require_admin(_controller.atualizar))
+produto_bp.delete("/<int:id>")(require_admin(_controller.deletar))

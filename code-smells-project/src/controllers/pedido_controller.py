@@ -1,36 +1,52 @@
-"""Controllers de pedido."""
+"""Controller HTTP de pedidos."""
 
-from flask import request
-
-from src.controllers.http import parametros_de_paginacao, sucesso
-from src.middlewares.auth import carregar_usuario_autenticado
-from src.schemas.pedido_schema import validar_novo_pedido, validar_status
-from src.services import pedido_service
-
-
-def criar_pedido():
-    # O dono do pedido vem do token, não do corpo: no legado qualquer um podia
-    # criar pedidos em nome de outro usuário informando "usuario_id".
-    usuario = carregar_usuario_autenticado()
-    dados = validar_novo_pedido(request.get_json(silent=True))
-    resultado = pedido_service.criar(usuario.id, dados)
-    return sucesso(resultado, status=201, mensagem="Pedido criado com sucesso")
+from src.controllers import http
+from src.middlewares.auth import usuario_atual
+from src.schemas.pedido_schema import carregar_itens, carregar_status
+from src.services.pedido_service import PedidoService
+from src.utils.errors import NotFoundError
 
 
-def listar_todos_pedidos():
-    pagina, por_pagina = parametros_de_paginacao()
-    return sucesso(pedido_service.listar_todos(pagina, por_pagina))
+class PedidoController:
+    def __init__(self, servico: PedidoService | None = None) -> None:
+        self.servico = servico or PedidoService()
 
+    def criar(self):
+        """POST /pedidos
 
-def listar_pedidos_usuario(usuario_id: int):
-    solicitante = carregar_usuario_autenticado()
-    pagina, por_pagina = parametros_de_paginacao()
-    return sucesso(
-        pedido_service.listar_do_usuario(usuario_id, solicitante, pagina, por_pagina)
-    )
+        O dono do pedido vem do token, não do corpo do request: aceitar
+        ``usuario_id`` do cliente permitiria criar pedidos em nome de terceiros.
+        """
+        itens = carregar_itens(http.corpo_json())
+        pedido = self.servico.criar(usuario_atual().id, itens)
+        return http.ok(pedido.to_dict(), status=201, mensagem="Pedido criado com sucesso.")
 
+    def listar_todos(self):
+        """GET /pedidos — restrito a administradores."""
+        limite, offset = http.paginacao()
+        pedidos = self.servico.listar(limite, offset)
+        return http.ok([p.to_dict() for p in pedidos], total=len(pedidos))
 
-def atualizar_status_pedido(pedido_id: int):
-    novo_status = validar_status(request.get_json(silent=True))
-    resultado = pedido_service.atualizar_status(pedido_id, novo_status)
-    return sucesso(resultado, mensagem="Status atualizado")
+    def listar_por_usuario(self, usuario_id: int):
+        """GET /pedidos/usuario/<usuario_id> — próprio usuário ou administrador."""
+        limite, offset = http.paginacao()
+        pedidos = self.servico.listar_por_usuario(usuario_id, limite, offset)
+        return http.ok([p.to_dict() for p in pedidos], total=len(pedidos))
+
+    def buscar(self, pedido_id: int):
+        """GET /pedidos/<pedido_id> — próprio usuário ou administrador."""
+        pedido = self.servico.buscar(pedido_id)
+
+        usuario = usuario_atual()
+        if not usuario.is_admin and pedido.usuario_id != usuario.id:
+            # Mesma resposta de um pedido inexistente: confirmar a existência
+            # de um pedido alheio já é informação demais.
+            raise NotFoundError(f"Pedido {pedido_id} não encontrado.")
+
+        return http.ok(pedido.to_dict())
+
+    def atualizar_status(self, pedido_id: int):
+        """PUT /pedidos/<pedido_id>/status — restrito a administradores."""
+        novo_status = carregar_status(http.corpo_json())
+        pedido = self.servico.atualizar_status(pedido_id, novo_status)
+        return http.ok(pedido.to_dict(), mensagem="Status atualizado.")

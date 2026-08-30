@@ -1,45 +1,56 @@
-"""Regras de negócio de relatórios.
+"""Regras de negócio de relatórios."""
 
-O cálculo de desconto vive aqui (e não dentro da camada de dados, como no
-legado), podendo ser testado sem banco através de ``calcular_desconto``.
-"""
+from typing import Any
 
-from src.config.constants import CASAS_DECIMAIS_MONETARIAS, FAIXAS_DESCONTO_FATURAMENTO
-from src.repositories import relatorio_repository
+from src.config.constants import FaixaDesconto
+from src.repositories.relatorio_repository import RelatorioRepository
 
 
-def calcular_desconto(faturamento: float) -> float:
-    """Aplica a primeira faixa de desconto cujo piso o faturamento ultrapassa."""
-    for piso, percentual in FAIXAS_DESCONTO_FATURAMENTO:
-        if faturamento > piso:
-            return faturamento * percentual
-    return 0.0
+class RelatorioService:
+    def __init__(self, repositorio: RelatorioRepository | None = None) -> None:
+        self.repositorio = repositorio or RelatorioRepository()
 
+    @staticmethod
+    def calcular_desconto(faturamento: float) -> float:
+        """Aplica a faixa de desconto correspondente ao faturamento.
 
-def _arredondar(valor: float) -> float:
-    return round(valor, CASAS_DECIMAIS_MONETARIAS)
+        Função pura: testável sem banco e sem HTTP, ao contrário da versão
+        anterior embutida na query do relatório.
+        """
+        for limite, taxa in FaixaDesconto.FAIXAS:
+            if faturamento > limite:
+                return round(faturamento * taxa, 2)
+        return 0.0
 
+    def vendas(self) -> dict[str, Any]:
+        agregado = self.repositorio.agregado_vendas()
+        desconto = self.calcular_desconto(agregado.faturamento_bruto)
 
-def gerar_relatorio_de_vendas() -> dict:
-    resumo = relatorio_repository.resumo_vendas()
-    total_pedidos = resumo["total_pedidos"]
-    faturamento = resumo["faturamento"]
-    desconto = calcular_desconto(faturamento)
+        ticket_medio = (
+            round(agregado.faturamento_bruto / agregado.total_pedidos, 2)
+            if agregado.total_pedidos
+            else 0.0
+        )
 
-    return {
-        "total_pedidos": total_pedidos,
-        "faturamento_bruto": _arredondar(faturamento),
-        "desconto_aplicavel": _arredondar(desconto),
-        "faturamento_liquido": _arredondar(faturamento - desconto),
-        "ticket_medio": _arredondar(faturamento / total_pedidos) if total_pedidos else 0,
-        "pedidos_por_status": resumo["por_status"],
-    }
+        return {
+            "total_pedidos": agregado.total_pedidos,
+            "faturamento_bruto": round(agregado.faturamento_bruto, 2),
+            "desconto_aplicavel": desconto,
+            "faturamento_liquido": round(agregado.faturamento_bruto - desconto, 2),
+            "pedidos_pendentes": agregado.pendentes,
+            "pedidos_aprovados": agregado.aprovados,
+            "pedidos_cancelados": agregado.cancelados,
+            "ticket_medio": ticket_medio,
+        }
 
+    def health(self) -> dict[str, Any]:
+        """Status mínimo do serviço.
 
-def status_da_aplicacao() -> dict:
-    """Health check sem dados sensíveis — o legado devolvia a SECRET_KEY aqui."""
-    return {
-        "status": "ok",
-        "database": "connected",
-        "counts": relatorio_repository.contagens_health(),
-    }
+        Deliberadamente não expõe SECRET_KEY, caminho do banco, flag de debug
+        nem contagens de registros, como fazia o ``/health`` original.
+        """
+        conectado = self.repositorio.verificar_conexao()
+        return {
+            "status": "ok" if conectado else "degradado",
+            "database": "connected" if conectado else "down",
+        }

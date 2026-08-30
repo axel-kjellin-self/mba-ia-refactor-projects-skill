@@ -1,13 +1,16 @@
-const express = require('express');
-const CheckoutController = require('../controllers/CheckoutController');
-const { asyncHandler } = require('../middlewares/errorHandler');
+const { Router } = require('express');
 
-const router = express.Router();
+const validate = require('../middlewares/validate');
+const { checkoutSchema } = require('../validators/schemas');
 
 /**
- * POST /api/checkout
- * Process course checkout (create/find user, enroll, process payment)
+ * Rota de checkout. Permanece pública por ser o fluxo de cadastro + compra,
+ * mas agora exige senha válida e valida todos os campos.
  */
-router.post('/', asyncHandler(CheckoutController.processCheckout.bind(CheckoutController)));
+module.exports = ({ checkoutController }) => {
+    const router = Router();
 
-module.exports = router;
+    router.post('/', validate(checkoutSchema), checkoutController.create);
+
+    return router;
+};

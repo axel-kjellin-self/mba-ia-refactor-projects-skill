@@ -1,98 +1,53 @@
-const config = require('../config/index');
+const { config } = require('../config');
+const { AppError, NotFoundError } = require('../utils/errors');
+const logger = require('../utils/logger');
 
 /**
- * Custom Error Classes
+ * Tratamento de erro centralizado.
+ *
+ * No código legado cada callback tratava (ou ignorava) erros por conta própria:
+ * o insert em `audit_logs` descartava o erro, o relatório nem verificava, e o
+ * DELETE respondia 200 mesmo em falha.
  */
 
-class AppError extends Error {
-    constructor(message, statusCode = 400) {
-        super(message);
-        this.statusCode = statusCode;
-        this.name = this.constructor.name;
-        Error.captureStackTrace(this, this.constructor);
-    }
+/** 404 para rotas não mapeadas. */
+function notFoundHandler(req, res, next) {
+    next(new NotFoundError(`Rota não encontrada: ${req.method} ${req.originalUrl}`));
 }
 
-class NotFoundError extends AppError {
-    constructor(message = 'Resource not found') {
-        super(message, 404);
-    }
-}
-
-class ValidationError extends AppError {
-    constructor(message) {
-        super(message, 400);
-    }
-}
-
-class UnauthorizedError extends AppError {
-    constructor(message = 'Unauthorized') {
-        super(message, 401);
-    }
-}
-
-class ForbiddenError extends AppError {
-    constructor(message = 'Forbidden') {
-        super(message, 403);
-    }
-}
-
-/**
- * Global error handler middleware
- * Catches all errors and formats consistent responses
- */
+/* eslint-disable-next-line no-unused-vars -- Express identifica o error handler pela aridade 4 */
 function errorHandler(err, req, res, next) {
-    // Log error (in production, use proper logger like Winston)
-    console.error('[Error]', {
-        message: err.message,
-        stack: config.nodeEnv === 'development' ? err.stack : undefined,
-        path: req.path,
-        method: req.method
-    });
+    const isOperational = err instanceof AppError;
+    const statusCode = isOperational ? err.statusCode : 500;
 
-    // Determine status code
-    const statusCode = err.statusCode || 500;
-
-    // Build error response
-    const errorResponse = {
-        error: err.message || 'Internal server error'
-    };
-
-    // Include stack trace in development
-    if (config.nodeEnv === 'development') {
-        errorResponse.stack = err.stack;
+    if (isOperational) {
+        logger.warn(err.message, {
+            code: err.code,
+            statusCode,
+            path: req.originalUrl,
+            requestId: req.id,
+        });
+    } else {
+        logger.error('Erro não tratado', {
+            message: err.message,
+            stack: err.stack,
+            path: req.originalUrl,
+            requestId: req.id,
+        });
     }
 
-    // Send response
-    res.status(statusCode).json(errorResponse);
-}
-
-/**
- * 404 handler for undefined routes
- */
-function notFoundHandler(req, res) {
-    res.status(404).json({
-        error: `Route ${req.method} ${req.path} not found`
-    });
-}
-
-/**
- * Async handler wrapper
- * Wraps async route handlers to catch promise rejections
- */
-function asyncHandler(fn) {
-    return (req, res, next) => {
-        Promise.resolve(fn(req, res, next)).catch(next);
+    const body = {
+        error: {
+            code: isOperational ? err.code : 'INTERNAL_ERROR',
+            // Detalhes de erros inesperados nunca vazam para o cliente.
+            message: isOperational ? err.message : 'Erro interno do servidor',
+        },
     };
+
+    if (isOperational && err.details) body.error.details = err.details;
+    if (!isOperational && !config.isProduction) body.error.debug = err.message;
+
+    res.status(statusCode).json(body);
 }
 
-module.exports = {
-    AppError,
-    NotFoundError,
-    ValidationError,
-    UnauthorizedError,
-    ForbiddenError,
-    errorHandler,
-    notFoundHandler,
-    asyncHandler
-};
+module.exports = { notFoundHandler, errorHandler };

@@ -1,48 +1,50 @@
-"""Hashing de senhas (bcrypt) e emissão/verificação de tokens JWT."""
+"""Primitivas de segurança: hash de senha e emissão/verificação de JWT.
 
-import datetime as dt
+Substitui o armazenamento e a comparação de senhas em texto plano que existiam
+em ``models.py``.
+"""
+
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import bcrypt
 import jwt
 
-from src.utils.errors import UnauthorizedError
+from src.config.settings import Config
 
-_ALGORITMO_JWT = "HS256"
-# bcrypt trunca a entrada em 72 bytes; rejeitamos antes para não aceitar
-# silenciosamente senhas longas cujo sufixo é ignorado.
-_TAMANHO_MAXIMO_BCRYPT_BYTES = 72
+_BCRYPT_ROUNDS = 12
 
 
 def hash_senha(senha: str) -> str:
-    senha_bytes = senha.encode("utf-8")
-    if len(senha_bytes) > _TAMANHO_MAXIMO_BCRYPT_BYTES:
-        raise ValueError("Senha excede o limite de 72 bytes suportado pelo bcrypt")
-    return bcrypt.hashpw(senha_bytes, bcrypt.gensalt()).decode("utf-8")
+    """Gera o hash bcrypt (com salt próprio) de uma senha."""
+    return bcrypt.hashpw(senha.encode("utf-8"), bcrypt.gensalt(_BCRYPT_ROUNDS)).decode("utf-8")
 
 
-def verificar_senha(senha: str, senha_hash: str) -> bool:
+def verificar_senha(senha: str, hash_armazenado: str) -> bool:
+    """Compara a senha informada com o hash armazenado, em tempo constante."""
     try:
-        return bcrypt.checkpw(senha.encode("utf-8"), senha_hash.encode("utf-8"))
-    except ValueError:
-        # Hash malformado no banco (ex.: registro herdado em texto plano).
+        return bcrypt.checkpw(senha.encode("utf-8"), hash_armazenado.encode("utf-8"))
+    except (ValueError, TypeError):
+        # Hash corrompido ou em formato legado: trata como falha de autenticação.
         return False
 
 
-def gerar_token(usuario_id: int, tipo: str, secret_key: str, expiracao_minutos: int) -> str:
-    agora = dt.datetime.now(dt.timezone.utc)
+def gerar_token(usuario_id: int, tipo: str) -> str:
+    """Emite um JWT de acesso para o usuário."""
+    agora = datetime.now(timezone.utc)
     payload = {
         "sub": str(usuario_id),
         "tipo": tipo,
         "iat": agora,
-        "exp": agora + dt.timedelta(minutes=expiracao_minutos),
+        "exp": agora + timedelta(seconds=Config.JWT_EXPIRES_SECONDS),
     }
-    return jwt.encode(payload, secret_key, algorithm=_ALGORITMO_JWT)
+    return jwt.encode(payload, Config.SECRET_KEY, algorithm=Config.JWT_ALGORITHM)
 
 
-def decodificar_token(token: str, secret_key: str) -> dict:
-    try:
-        return jwt.decode(token, secret_key, algorithms=[_ALGORITMO_JWT])
-    except jwt.ExpiredSignatureError as exc:
-        raise UnauthorizedError("Token expirado") from exc
-    except jwt.InvalidTokenError as exc:
-        raise UnauthorizedError("Token inválido") from exc
+def decodificar_token(token: str) -> dict[str, Any]:
+    """Valida assinatura e expiração, devolvendo o payload.
+
+    Raises:
+        jwt.InvalidTokenError: token inválido, expirado ou adulterado.
+    """
+    return jwt.decode(token, Config.SECRET_KEY, algorithms=[Config.JWT_ALGORITHM])

@@ -1,49 +1,48 @@
 """Gerenciamento de conexão com o SQLite.
 
-Substitui o singleton global do código legado: cada request tem a própria
-conexão, guardada em ``flask.g`` e fechada no teardown do app context. Isso
-elimina o compartilhamento de cursors/transações entre threads.
+Substitui a conexão global compartilhada entre threads (``check_same_thread=False``)
+por uma conexão por request, ancorada no contexto de aplicação do Flask.
 """
 
 import sqlite3
 from contextlib import contextmanager
+from typing import Iterator
 
-from flask import current_app, g
+from flask import Flask, g
 
-_APP_CONFIG_KEY = "DATABASE_PATH"
+from src.config.settings import Config
 
 
-def _abrir_conexao(caminho: str) -> sqlite3.Connection:
-    conexao = sqlite3.connect(caminho)
+def _conectar() -> sqlite3.Connection:
+    conexao = sqlite3.connect(Config.DATABASE_PATH)
     conexao.row_factory = sqlite3.Row
-    # Sem este PRAGMA o SQLite ignora as FOREIGN KEYs declaradas no schema.
+    # Integridade referencial precisa ser habilitada por conexão no SQLite.
     conexao.execute("PRAGMA foreign_keys = ON")
     return conexao
 
 
 def get_db() -> sqlite3.Connection:
-    """Retorna a conexão da request atual, criando-a no primeiro acesso."""
+    """Devolve a conexão do request atual, criando-a sob demanda."""
     if "db" not in g:
-        g.db = _abrir_conexao(current_app.config[_APP_CONFIG_KEY])
+        g.db = _conectar()
     return g.db
 
 
-def close_db(_exception=None) -> None:
-    """Fecha a conexão da request. Registrado como ``teardown_appcontext``."""
+def close_db(_exception: BaseException | None = None) -> None:
+    """Fecha a conexão ao fim do request."""
     conexao = g.pop("db", None)
     if conexao is not None:
         conexao.close()
 
 
 @contextmanager
-def transaction():
-    """Executa um bloco de operações numa transação única.
+def transacao() -> Iterator[sqlite3.Connection]:
+    """Executa um bloco de operações atomicamente.
 
-    ``BEGIN IMMEDIATE`` adquire o lock de escrita já na abertura, o que serializa
-    operações concorrentes (ex.: dois pedidos disputando o mesmo estoque).
+    Faz commit ao final e rollback em caso de exceção — ausente na criação de
+    pedidos do código original, que podia deixar itens e estoque inconsistentes.
     """
     conexao = get_db()
-    conexao.execute("BEGIN IMMEDIATE")
     try:
         yield conexao
     except Exception:
@@ -53,6 +52,20 @@ def transaction():
         conexao.commit()
 
 
-def init_app(app) -> None:
-    """Liga o ciclo de vida da conexão ao ciclo de vida da request."""
+@contextmanager
+def conexao_avulsa() -> Iterator[sqlite3.Connection]:
+    """Conexão fora do ciclo de request (inicialização, scripts, testes)."""
+    conexao = _conectar()
+    try:
+        yield conexao
+        conexao.commit()
+    except Exception:
+        conexao.rollback()
+        raise
+    finally:
+        conexao.close()
+
+
+def init_app(app: Flask) -> None:
+    """Registra o teardown que fecha a conexão ao término de cada request."""
     app.teardown_appcontext(close_db)

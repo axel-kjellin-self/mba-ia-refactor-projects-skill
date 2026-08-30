@@ -1,60 +1,55 @@
-"""Validação de payloads de usuário e de login."""
+"""Schemas de entrada para usuários e autenticação."""
 
-from src.config.constants import (
-    NOME_USUARIO_TAMANHO_MAXIMO,
-    NOME_USUARIO_TAMANHO_MINIMO,
-    SENHA_TAMANHO_MAXIMO,
-    SENHA_TAMANHO_MINIMO,
-)
+from dataclasses import dataclass
+from typing import Any
+
+from src.config.constants import RegrasValidacao
 from src.schemas import validators
-from src.utils.errors import ValidationError
 
 
-def validar_novo_usuario(dados) -> dict:
-    dados = validators.exigir_dict(dados)
-    return {
-        "nome": validators.texto(
+@dataclass(frozen=True, slots=True)
+class UsuarioInput:
+    nome: str
+    email: str
+    senha: str
+
+
+@dataclass(frozen=True, slots=True)
+class LoginInput:
+    email: str
+    senha: str
+
+
+def carregar_usuario(dados: Any) -> UsuarioInput:
+    """Valida o cadastro de usuário, incluindo formato de e-mail e força da senha."""
+    dados = validators.exigir_objeto(dados)
+
+    return UsuarioInput(
+        nome=validators.texto(
             dados,
             "nome",
-            minimo=NOME_USUARIO_TAMANHO_MINIMO,
-            maximo=NOME_USUARIO_TAMANHO_MAXIMO,
+            minimo=RegrasValidacao.NOME_USUARIO_MIN,
+            maximo=RegrasValidacao.NOME_USUARIO_MAX,
         ),
-        "email": validators.email(dados),
-        "senha": _validar_forca_da_senha(
-            validators.texto(dados, "senha", minimo=1, maximo=SENHA_TAMANHO_MAXIMO)
+        email=validators.email(dados, "email", maximo=RegrasValidacao.EMAIL_MAX),
+        senha=validators.texto(
+            dados,
+            "senha",
+            minimo=RegrasValidacao.SENHA_MIN,
+            maximo=RegrasValidacao.SENHA_MAX,
         ),
-    }
-
-
-def validar_login(dados) -> dict:
-    dados = validators.exigir_dict(dados)
-    return {
-        "email": validators.texto(dados, "email", minimo=3, maximo=254).lower(),
-        "senha": validators.texto(dados, "senha", minimo=1, maximo=SENHA_TAMANHO_MAXIMO),
-    }
-
-
-def _validar_forca_da_senha(senha: str) -> str:
-    """Exige comprimento mínimo e três classes de caracteres.
-
-    O legado aceitava qualquer senha não vazia — daí "123456" no banco.
-    """
-    if len(senha) < SENHA_TAMANHO_MINIMO:
-        raise ValidationError(
-            f"A senha deve ter ao menos {SENHA_TAMANHO_MINIMO} caracteres"
-        )
-
-    classes = sum(
-        [
-            any(c.islower() for c in senha),
-            any(c.isupper() for c in senha),
-            any(c.isdigit() for c in senha),
-            any(not c.isalnum() for c in senha),
-        ]
     )
-    if classes < 3:
-        raise ValidationError(
-            "A senha deve combinar ao menos três entre: minúsculas, maiúsculas, "
-            "números e símbolos"
-        )
-    return senha
+
+
+def carregar_login(dados: Any) -> LoginInput:
+    """Valida as credenciais de login.
+
+    Não aplica regras de força de senha: senhas cadastradas antes de uma
+    mudança de política ainda precisam conseguir autenticar.
+    """
+    dados = validators.exigir_objeto(dados)
+
+    return LoginInput(
+        email=validators.email(dados, "email", maximo=RegrasValidacao.EMAIL_MAX),
+        senha=validators.texto(dados, "senha", minimo=1, maximo=RegrasValidacao.SENHA_MAX),
+    )

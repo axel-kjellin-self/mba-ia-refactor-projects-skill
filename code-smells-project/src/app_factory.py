@@ -1,57 +1,57 @@
-"""Composition root: monta a aplicação a partir das camadas.
+"""Application factory.
 
-Toda a fiação (config → banco → middlewares → rotas) acontece aqui, o que
-permite instanciar a app em testes com um banco temporário.
+Composition root: monta configuração, banco, middlewares e rotas. Não contém
+nenhuma regra de negócio nem acesso direto ao banco — o ``app.py`` original
+implementava handlers com SQL inline.
 """
 
 import logging
 
-import click
 from flask import Flask
 from flask_cors import CORS
 
-from src.config.database import init_app as init_db_lifecycle
-from src.config.schema import criar_schema, init_database, popular_dados_iniciais
-from src.config.settings import Settings, load_settings
+from src.config import database
+from src.config.database import conexao_avulsa
+from src.config.schema import init_db
+from src.config.settings import Config
 from src.middlewares.error_handler import register_error_handlers
-from src.middlewares.logging_config import configurar_logging
-from src.routes import register_blueprints
+from src.middlewares.logging_config import configurar_logging, register_request_logging
+from src.routes import register_routes
 
 logger = logging.getLogger(__name__)
 
 
-def create_app(settings: Settings | None = None) -> Flask:
-    settings = settings or load_settings()
-    configurar_logging(settings.log_level)
+def create_app(config: type[Config] = Config, *, inicializar_banco: bool = True) -> Flask:
+    """Cria e configura a aplicação Flask."""
+    configurar_logging()
+    config.validate()
 
     app = Flask(__name__)
-    app.config["SETTINGS"] = settings
-    app.config["SECRET_KEY"] = settings.secret_key
-    app.config["DATABASE_PATH"] = settings.database_path
-    app.config["DEBUG"] = settings.debug
-    # Evita que o Flask converta exceções em 500 antes dos nossos handlers.
-    app.config["JSON_SORT_KEYS"] = False
+    app.config.from_object(config)
 
-    CORS(app, origins=settings.cors_origins)
+    # CORS restrito às origens configuradas, com credenciais habilitadas apenas
+    # para elas. Antes, qualquer origem podia chamar qualquer rota.
+    CORS(
+        app,
+        origins=config.CORS_ORIGINS,
+        supports_credentials=True,
+        allow_headers=["Content-Type", "Authorization"],
+    )
 
-    init_db_lifecycle(app)
+    database.init_app(app)
+
+    if inicializar_banco:
+        with conexao_avulsa() as conexao:
+            init_db(conexao)
+
+    register_request_logging(app)
     register_error_handlers(app)
-    register_blueprints(app)
-    _registrar_comandos(app)
+    register_routes(app)
 
-    logger.info("Aplicação inicializada (env=%s, debug=%s)", settings.env, settings.debug)
+    logger.info(
+        "Aplicação inicializada (env=%s, debug=%s, db=%s)",
+        config.ENV,
+        config.DEBUG,
+        config.DATABASE_PATH,
+    )
     return app
-
-
-def _registrar_comandos(app: Flask) -> None:
-    @app.cli.command("init-db")
-    @click.option("--seed", is_flag=True, help="Insere catálogo e admin de exemplo.")
-    def init_db_command(seed: bool):
-        """Cria o schema do banco (e opcionalmente os dados iniciais)."""
-        criar_schema()
-        if seed:
-            popular_dados_iniciais(app.config["SETTINGS"])
-        click.echo("Banco inicializado.")
-
-
-__all__ = ["create_app", "init_database"]

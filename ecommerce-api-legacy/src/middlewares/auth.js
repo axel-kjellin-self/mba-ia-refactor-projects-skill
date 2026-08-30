@@ -1,97 +1,56 @@
-const AuthService = require('../services/AuthService');
+const { Roles } = require('../config/constants');
+const { UnauthorizedError, ForbiddenError } = require('../utils/errors');
 
 /**
- * Authentication Middleware
- * Verifies JWT token and attaches user info to request
+ * Middlewares de autenticação e autorização.
+ *
+ * O código legado não tinha nenhum: o relatório financeiro e o DELETE de
+ * usuários eram acessíveis por qualquer anônimo.
  */
-function requireAuth(req, res, next) {
-    try {
-        // Get token from Authorization header
-        const authHeader = req.headers.authorization;
 
-        if (!authHeader) {
-            return res.status(401).json({ error: 'No token provided' });
-        }
-
-        // Extract token (format: "Bearer <token>")
-        const token = authHeader.replace('Bearer ', '');
-
-        if (!token) {
-            return res.status(401).json({ error: 'No token provided' });
-        }
-
-        // Verify token
-        const decoded = AuthService.verifyToken(token);
-
-        // Attach user info to request
-        req.user = {
-            userId: decoded.userId,
-            email: decoded.email,
-            role: decoded.role
-        };
-
-        next();
-
-    } catch (error) {
-        if (error.message.includes('Invalid') || error.message.includes('expired')) {
-            return res.status(401).json({ error: 'Invalid or expired token' });
-        }
-
-        next(error);
-    }
-}
-
-/**
- * Role-based authorization middleware
- * Requires user to have specific role
- */
-function requireRole(...roles) {
+/** Exige um JWT válido no header `Authorization: Bearer <token>`. */
+function requireAuth(authService) {
     return (req, res, next) => {
-        if (!req.user) {
-            return res.status(401).json({ error: 'Authentication required' });
-        }
+        try {
+            const header = req.headers.authorization || '';
+            const [scheme, token] = header.split(' ');
 
-        if (!roles.includes(req.user.role)) {
-            return res.status(403).json({
-                error: `Forbidden: Requires role ${roles.join(' or ')}`
-            });
-        }
+            if (scheme !== 'Bearer' || !token) {
+                throw new UnauthorizedError('Token de autenticação ausente');
+            }
 
-        next();
+            const payload = authService.verifyToken(token);
+            req.user = { id: payload.sub, role: payload.role };
+            next();
+        } catch (err) {
+            next(err);
+        }
     };
 }
 
-/**
- * Optional authentication
- * Attaches user if token is valid, but doesn't reject if missing
- */
-function optionalAuth(req, res, next) {
-    try {
-        const authHeader = req.headers.authorization;
-
-        if (!authHeader) {
-            return next();
-        }
-
-        const token = authHeader.replace('Bearer ', '');
-        const decoded = AuthService.verifyToken(token);
-
-        req.user = {
-            userId: decoded.userId,
-            email: decoded.email,
-            role: decoded.role
-        };
-
-        next();
-
-    } catch (error) {
-        // Token invalid, but continue without user
-        next();
+/** Exige papel de administrador. Deve ser aplicado depois de `requireAuth`. */
+function requireAdmin(req, res, next) {
+    if (!req.user) return next(new UnauthorizedError());
+    if (req.user.role !== Roles.ADMIN) {
+        return next(new ForbiddenError('Requer privilégios de administrador'));
     }
+    return next();
 }
 
-module.exports = {
-    requireAuth,
-    requireRole,
-    optionalAuth
-};
+/**
+ * Permite a ação ao administrador ou ao próprio dono do recurso.
+ * Previne IDOR: sem isso, um usuário autenticado poderia deletar outro.
+ */
+function requireSelfOrAdmin(getResourceUserId) {
+    return (req, res, next) => {
+        if (!req.user) return next(new UnauthorizedError());
+
+        const targetId = getResourceUserId(req);
+        if (req.user.role === Roles.ADMIN || req.user.id === targetId) {
+            return next();
+        }
+        return next(new ForbiddenError('Você só pode alterar a própria conta'));
+    };
+}
+
+module.exports = { requireAuth, requireAdmin, requireSelfOrAdmin };

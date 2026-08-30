@@ -1,66 +1,114 @@
-"""Middleware de autenticação e autorização por JWT.
+"""Autenticação e autorização por JWT.
 
-O legado não tinha nenhuma proteção: qualquer visitante anônimo listava usuários,
-alterava preços e lia pedidos de terceiros.
+O código original não tinha nenhuma camada equivalente: todas as rotas eram
+públicas, inclusive as destrutivas.
 """
 
+from dataclasses import dataclass
 from functools import wraps
+from typing import Callable
 
-from flask import current_app, g, request
+import jwt
+from flask import g, request
 
-from src.repositories import usuario_repository
+from src.config.constants import TipoUsuario
 from src.utils.errors import ForbiddenError, UnauthorizedError
 from src.utils.security import decodificar_token
 
-_PREFIXO_BEARER = "bearer "
+
+@dataclass(frozen=True, slots=True)
+class UsuarioAutenticado:
+    """Identidade extraída do token, disponível em ``g.usuario``."""
+
+    id: int
+    tipo: str
+
+    @property
+    def is_admin(self) -> bool:
+        return self.tipo == TipoUsuario.ADMIN
 
 
 def _extrair_token() -> str:
     cabecalho = request.headers.get("Authorization", "")
-    if not cabecalho.lower().startswith(_PREFIXO_BEARER):
-        raise UnauthorizedError("Envie o token no header 'Authorization: Bearer <token>'")
-    token = cabecalho[len(_PREFIXO_BEARER):].strip()
+    prefixo = "Bearer "
+
+    if not cabecalho.startswith(prefixo):
+        raise UnauthorizedError("Token de autenticação ausente ou malformado.")
+
+    token = cabecalho[len(prefixo):].strip()
     if not token:
-        raise UnauthorizedError("Token ausente")
+        raise UnauthorizedError("Token de autenticação ausente.")
     return token
 
 
-def carregar_usuario_autenticado():
-    """Valida o token e devolve o usuário atual, cacheado na request."""
-    if "usuario_atual" in g:
-        return g.usuario_atual
+def autenticar() -> UsuarioAutenticado:
+    """Valida o token do request e devolve a identidade correspondente."""
+    token = _extrair_token()
 
-    payload = decodificar_token(_extrair_token(), current_app.config["SETTINGS"].secret_key)
     try:
-        usuario_id = int(payload.get("sub", ""))
-    except (TypeError, ValueError) as exc:
-        raise UnauthorizedError("Token inválido") from exc
+        payload = decodificar_token(token)
+    except jwt.ExpiredSignatureError:
+        raise UnauthorizedError("Token expirado.") from None
+    except jwt.InvalidTokenError:
+        raise UnauthorizedError("Token inválido.") from None
 
-    # Recarregamos do banco em vez de confiar no payload: contas removidas ou
-    # rebaixadas perdem o acesso imediatamente, sem esperar o token expirar.
-    usuario = usuario_repository.buscar_por_id(usuario_id)
+    try:
+        usuario_id = int(payload["sub"])
+    except (KeyError, TypeError, ValueError):
+        raise UnauthorizedError("Token inválido.") from None
+
+    return UsuarioAutenticado(id=usuario_id, tipo=payload.get("tipo", TipoUsuario.CLIENTE))
+
+
+def require_auth(funcao: Callable) -> Callable:
+    """Exige um token válido e popula ``g.usuario``."""
+
+    @wraps(funcao)
+    def wrapper(*args, **kwargs):
+        g.usuario = autenticar()
+        return funcao(*args, **kwargs)
+
+    return wrapper
+
+
+def require_admin(funcao: Callable) -> Callable:
+    """Exige token válido de um usuário com papel de administrador."""
+
+    @wraps(funcao)
+    def wrapper(*args, **kwargs):
+        g.usuario = autenticar()
+        if not g.usuario.is_admin:
+            raise ForbiddenError("Esta operação requer privilégios de administrador.")
+        return funcao(*args, **kwargs)
+
+    return wrapper
+
+
+def require_self_or_admin(param: str = "usuario_id") -> Callable:
+    """Permite acesso apenas ao dono do recurso ou a um administrador.
+
+    Fecha o IDOR de ``GET /pedidos/usuario/<id>``, que expunha o histórico de
+    compras de qualquer usuário.
+    """
+
+    def decorator(funcao: Callable) -> Callable:
+        @wraps(funcao)
+        def wrapper(*args, **kwargs):
+            g.usuario = autenticar()
+            alvo = kwargs.get(param)
+
+            if not g.usuario.is_admin and g.usuario.id != alvo:
+                raise ForbiddenError("Você só pode acessar os seus próprios dados.")
+            return funcao(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+def usuario_atual() -> UsuarioAutenticado:
+    """Identidade do request corrente. Só é válida dentro de rotas protegidas."""
+    usuario = getattr(g, "usuario", None)
     if usuario is None:
-        raise UnauthorizedError("Token inválido")
-
-    g.usuario_atual = usuario
+        raise UnauthorizedError("Requisição não autenticada.")
     return usuario
-
-
-def login_required(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        carregar_usuario_autenticado()
-        return func(*args, **kwargs)
-
-    return wrapper
-
-
-def admin_required(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        usuario = carregar_usuario_autenticado()
-        if not usuario.is_admin:
-            raise ForbiddenError("Esta operação exige privilégios de administrador")
-        return func(*args, **kwargs)
-
-    return wrapper

@@ -1,18 +1,26 @@
+"""Rotas de tasks — apenas URL → controller, com os middlewares aplicados."""
 from flask import Blueprint
+
+from src.config.constants import UserRole
 from src.controllers.task_controller import TaskController
-from src.middlewares.auth import require_auth
+from src.middlewares.auth import require_auth, require_role
 
-# Create blueprint
 task_bp = Blueprint('tasks', __name__, url_prefix='/tasks')
+controller = TaskController()
 
-# Instantiate controller
-task_controller = TaskController()
-
-# Routes
-task_bp.route('/', methods=['GET'])(task_controller.get_all)
-task_bp.route('/<int:task_id>', methods=['GET'])(task_controller.get_by_id)
-task_bp.route('/', methods=['POST'])(task_controller.create)
-task_bp.route('/<int:task_id>', methods=['PUT'])(task_controller.update)
-task_bp.route('/<int:task_id>', methods=['DELETE'])(task_controller.delete)
-task_bp.route('/search', methods=['GET'])(task_controller.search)
-task_bp.route('/stats', methods=['GET'])(task_controller.get_stats)
+task_bp.add_url_rule('', 'list', require_auth(controller.list), methods=['GET'])
+task_bp.add_url_rule('/search', 'search', require_auth(controller.search), methods=['GET'])
+task_bp.add_url_rule('/stats', 'stats', require_auth(controller.stats), methods=['GET'])
+task_bp.add_url_rule(
+    '/<int:task_id>', 'get', require_auth(controller.get), methods=['GET']
+)
+task_bp.add_url_rule('', 'create', require_auth(controller.create), methods=['POST'])
+task_bp.add_url_rule(
+    '/<int:task_id>', 'update', require_auth(controller.update), methods=['PUT']
+)
+task_bp.add_url_rule(
+    '/<int:task_id>',
+    'delete',
+    require_role(UserRole.ADMIN.value, UserRole.MANAGER.value)(controller.delete),
+    methods=['DELETE'],
+)

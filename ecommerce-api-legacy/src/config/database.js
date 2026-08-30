@@ -1,132 +1,100 @@
-const sqlite3 = require('sqlite3').verbose();
-const { promisify } = require('util');
+const sqlite3 = require('sqlite3');
+
+const { config } = require('./index');
 
 /**
- * Database connection manager
- * Provides promisified database methods for async/await
+ * Wrapper Promise-based sobre o driver `sqlite3`, que só expõe callbacks.
+ *
+ * Existe para dois motivos:
+ *  1. Permitir `async/await` nas camadas superiores (elimina o callback hell).
+ *  2. Oferecer `transaction()` com commit/rollback — o código legado gravava
+ *     matrícula, pagamento e auditoria sem transação, deixando registros órfãos
+ *     quando um dos passos falhava.
  */
 class Database {
-    constructor() {
-        this.db = new sqlite3.Database(':memory:');
-
-        // Promisify database methods
-        this.run = promisify(this.db.run.bind(this.db));
-        this.get = promisify(this.db.get.bind(this.db));
-        this.all = promisify(this.db.all.bind(this.db));
+    constructor(filename = config.database.file) {
+        this.filename = filename;
+        this.db = null;
+        // SQLite aceita uma transação por conexão. Como usamos conexão única,
+        // esta fila serializa as transações para que não se sobreponham.
+        this.transactionQueue = Promise.resolve();
     }
 
-    /**
-     * Initialize database schema
-     */
-    async initSchema() {
-        await this.db.serialize(async () => {
-            // Users table
-            await this.run(`
-                CREATE TABLE IF NOT EXISTS users (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    email TEXT NOT NULL UNIQUE,
-                    password TEXT NOT NULL,
-                    role TEXT DEFAULT 'user',
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            `);
-
-            // Courses table
-            await this.run(`
-                CREATE TABLE IF NOT EXISTS courses (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    title TEXT NOT NULL,
-                    price REAL NOT NULL CHECK(price >= 0),
-                    active INTEGER DEFAULT 1 CHECK(active IN (0, 1)),
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            `);
-
-            // Enrollments table
-            await this.run(`
-                CREATE TABLE IF NOT EXISTS enrollments (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
-                    course_id INTEGER NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    FOREIGN KEY (course_id) REFERENCES courses(id),
-                    UNIQUE(user_id, course_id)
-                )
-            `);
-
-            // Payments table
-            await this.run(`
-                CREATE TABLE IF NOT EXISTS payments (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    enrollment_id INTEGER NOT NULL,
-                    amount REAL NOT NULL CHECK(amount >= 0),
-                    status TEXT NOT NULL CHECK(status IN ('PAID', 'DENIED', 'PENDING')),
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (enrollment_id) REFERENCES enrollments(id) ON DELETE CASCADE
-                )
-            `);
-
-            // Audit logs table
-            await this.run(`
-                CREATE TABLE IF NOT EXISTS audit_logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    action TEXT NOT NULL,
-                    user_id INTEGER,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id)
-                )
-            `);
+    connect() {
+        return new Promise((resolve, reject) => {
+            this.db = new sqlite3.Database(this.filename, (err) => {
+                if (err) return reject(err);
+                // Sem este PRAGMA o SQLite ignora as FOREIGN KEYs declaradas.
+                this.db.run('PRAGMA foreign_keys = ON', (pragmaErr) =>
+                    pragmaErr ? reject(pragmaErr) : resolve(this)
+                );
+            });
         });
+    }
 
-        console.log('[Database] Schema initialized with proper constraints');
+    /** Executa INSERT/UPDATE/DELETE. Retorna `{ lastID, changes }`. */
+    run(sql, params = []) {
+        return new Promise((resolve, reject) => {
+            // function() (não arrow) para acessar `this.lastID` do driver.
+            this.db.run(sql, params, function callback(err) {
+                if (err) return reject(err);
+                resolve({ lastID: this.lastID, changes: this.changes });
+            });
+        });
+    }
+
+    /** Retorna a primeira linha, ou `undefined`. */
+    get(sql, params = []) {
+        return new Promise((resolve, reject) => {
+            this.db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row)));
+        });
+    }
+
+    /** Retorna todas as linhas. */
+    all(sql, params = []) {
+        return new Promise((resolve, reject) => {
+            this.db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows || [])));
+        });
+    }
+
+    /** Executa múltiplos statements (DDL, seeds). */
+    exec(sql) {
+        return new Promise((resolve, reject) => {
+            this.db.exec(sql, (err) => (err ? reject(err) : resolve()));
+        });
     }
 
     /**
-     * Seed initial data
+     * Executa `work` dentro de uma transação, com rollback automático em caso
+     * de erro. `work` recebe esta mesma instância para encadear as queries.
      */
-    async seed(seedData) {
-        await this.run(
-            'INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)',
-            [seedData.user.name, seedData.user.email, seedData.user.password, seedData.user.role]
-        );
+    transaction(work) {
+        const run = async () => {
+            await this.run('BEGIN IMMEDIATE TRANSACTION');
+            try {
+                const result = await work(this);
+                await this.run('COMMIT');
+                return result;
+            } catch (err) {
+                await this.run('ROLLBACK').catch(() => {
+                    /* preserva o erro original */
+                });
+                throw err;
+            }
+        };
 
-        for (const course of seedData.courses) {
-            await this.run(
-                'INSERT INTO courses (title, price, active) VALUES (?, ?, ?)',
-                [course.title, course.price, course.active]
-            );
-        }
-
-        if (seedData.enrollment) {
-            await this.run(
-                'INSERT INTO enrollments (user_id, course_id) VALUES (?, ?)',
-                [seedData.enrollment.userId, seedData.enrollment.courseId]
-            );
-        }
-
-        if (seedData.payment) {
-            await this.run(
-                'INSERT INTO payments (enrollment_id, amount, status) VALUES (?, ?, ?)',
-                [seedData.payment.enrollmentId, seedData.payment.amount, seedData.payment.status]
-            );
-        }
-
-        console.log('[Database] Seed data loaded');
+        // Encadeia na fila e devolve o resultado desta execução específica.
+        const queued = this.transactionQueue.then(run, run);
+        this.transactionQueue = queued.catch(() => {});
+        return queued;
     }
 
-    /**
-     * Close database connection
-     */
     close() {
         return new Promise((resolve, reject) => {
-            this.db.close((err) => {
-                if (err) reject(err);
-                else resolve();
-            });
+            if (!this.db) return resolve();
+            this.db.close((err) => (err ? reject(err) : resolve()));
         });
     }
 }
 
-module.exports = new Database();
+module.exports = Database;
