@@ -122,10 +122,46 @@ Esta fase só deve ser executada após aprovação explícita do usuário na Fas
    - **CRITICAL: SQL Injection** → Substituir por queries parametrizadas
    - **CRITICAL: Weak Crypto** → Implementar bcrypt/argon2
    - **HIGH: God Class** → Separar em Models + Controllers + Services
-   - **HIGH: Missing Auth** → Adicionar middleware de autenticação
+   - **HIGH: Missing Auth** → Criar middleware **e aplicá-lo em cada rota** (ver 3.1)
    - **HIGH: N+1 Queries** → Otimizar com JOINs ou eager loading
    - **MEDIUM: Missing Validation** → Adicionar schema validation
    - **LOW: Magic Numbers** → Extrair para constantes
+
+   ### 3.1 Autenticação: criar o middleware NÃO é suficiente
+
+   ⚠️ Criar `middlewares/auth.py` e importá-lo no arquivo de rotas **não protege nada**.
+   Um decorator importado e não aplicado é código morto — o endpoint continua público.
+
+   Para **cada rota** do projeto, decida e aplique explicitamente uma política:
+
+   | Política | Quando usar |
+   |----------|-------------|
+   | pública | login, cadastro, catálogo de leitura, health check |
+   | `require_auth` | qualquer endpoint que dependa de um usuário logado |
+   | `require_owner_or_admin` | rota com id de usuário no path (`/users/<id>`) |
+   | `require_admin` | listagens globais, relatórios, escrita em dados de catálogo |
+
+   Aplicação, por estilo de registro de rota:
+
+   ```python
+   # Flask com decorator
+   @bp.route('/tasks', methods=['GET'])
+   @require_auth
+   def listar(): ...
+
+   # Flask registrando controller (envolva a função!)
+   bp.route('/tasks', methods=['GET'])(require_auth(controller.listar))
+   ```
+
+   ```javascript
+   // Express: por rota, ou no router inteiro
+   router.get('/:id', requireAuth, asyncHandler(ctrl.get));
+   router.use(requireAuth); router.use(requireRole('admin'));
+   ```
+
+   **Nenhuma rota pode ficar sem decisão registrada.** Se for pública, diga por quê
+   em comentário. Comentários como `# should be protected in production` são proibidos:
+   ou protege agora, ou justifica por que é pública.
 
 4. **Mover Código para Camadas Apropriadas**
 
@@ -174,12 +210,63 @@ Esta fase só deve ser executada após aprovação explícita do usuário na Fas
    - Usar logging estruturado (não print/console.log)
    - Retornar códigos HTTP apropriados
 
-7. **Validar Resultado**
-   - Tentar iniciar a aplicação
-   - Verificar se todos os endpoints respondem
-   - Confirmar que não há erros de importação/sintaxe
+7. **Eliminar o Código Legado**
 
-8. **Imprimir Sumário**
+   ⚠️ Criar `src/` sem apagar o código antigo **não resolve os findings** — apenas
+   duplica o projeto. Todo finding CRITICAL continua vivo enquanto o arquivo original
+   existir, mesmo que nada o importe: o avaliador (e um `grep`) ainda o encontram.
+
+   - **Delete** os arquivos/pastas substituídos pela nova estrutura. O histórico do
+     git preserva o original; não é preciso manter cópia na árvore de trabalho.
+   - **Não** mova para `legacy/`, `old/` ou `_backup/`. Isso não elimina o finding,
+     só o esconde de leitores desatentos.
+   - **Reaponte os scripts auxiliares** (`seed.py`, `manage.py`, fixtures, migrations)
+     para os novos módulos. Eles não aparecem nas rotas e passam despercebidos.
+   - Confirme que nada sobrou:
+     ```bash
+     grep -rn "hashlib.md5\|sha1(" --include=*.py --include=*.js . | grep -v node_modules
+     grep -rn "^from models\|^from routes\|require('../AppManager')" .
+     ```
+     Exemplos dentro dos arquivos de referência da própria skill são esperados;
+     qualquer ocorrência em código do projeto é falha.
+
+8. **Validar Resultado**
+
+   Execute os comandos e **cole a saída real**. Não marque um item sem tê-lo rodado.
+
+   ```bash
+   # a) a aplicação sobe?
+   python app.py    # ou: npm start
+   # b) endpoint público responde?
+   curl -s -o /dev/null -w "%{http_code}" http://localhost:<porta>/health
+   # c) endpoint protegido REJEITA sem token? (401/403 = sucesso)
+   curl -s -o /dev/null -w "%{http_code}" http://localhost:<porta>/<rota-protegida>
+   # d) endpoint protegido ACEITA com token?
+   curl -s -o /dev/null -w "%{http_code}" http://localhost:<porta>/<rota-protegida> \
+     -H "Authorization: Bearer <token>"
+   ```
+
+   Se não for possível executar (dependências ausentes, sem rede), **diga isso
+   explicitamente** no sumário em vez de presumir sucesso.
+
+   Verificação estática obrigatória — todo decorator importado é usado?
+   ```bash
+   grep -rn "require_auth\|require_admin\|requireAuth" src/routes/
+   ```
+   Se um nome aparece só na linha de `import`, a rota está desprotegida. Volte ao 3.1.
+
+9. **Imprimir Sumário**
+
+   ⚠️ O bloco abaixo é um **formulário a preencher**, não texto para copiar. Cada
+   linha de `## Validation` só recebe `✓` se o comando do passo 8 foi executado e
+   passou. Use `✗` para o que falhou e `?` para o que não foi possível verificar,
+   sempre com a razão ao lado. Um sumário todo `✓` sem execução é relatório falso —
+   é pior que uma refatoração incompleta, porque esconde o que ficou por fazer.
+
+   Nas contagens, use os números do relatório da Fase 2 deste projeto. Não invente
+   métricas de performance ("99% de redução", "score 10/10") que não foram medidas;
+   se for estimativa, escreva "estimado".
+
    ```
    ================================
    PHASE 3: REFACTORING COMPLETE
@@ -202,12 +289,19 @@ Esta fase só deve ser executada após aprovação explícita do usuário na Fas
    │   └── error_handler.py
    └── app.py
 
-   ## Validation
-     ✓ Application boots without errors
-     ✓ All endpoints respond correctly
-     ✓ Configuration externalized
-     ✓ Authentication implemented
-     ✓ Zero critical anti-patterns remaining
+   ## Validation      [✓ verificado | ✗ falhou | ? não verificável]
+     <?> Application boots without errors      <cole a saída ou a razão>
+     <?> Public endpoint responds              <código HTTP observado>
+     <?> Protected endpoint rejects w/o token  <código HTTP observado>
+     <?> Protected endpoint accepts w/ token   <código HTTP observado>
+     <?> Configuration externalized            <nenhum secret no código?>
+     <?> Every imported decorator is applied   <saída do grep do passo 8>
+     <?> Legacy code deleted                   <saída do grep do passo 7>
+
+   ## Findings resolvidos (da Fase 2)
+     CRITICAL: <n>/<total>   HIGH: <n>/<total>
+     MEDIUM:   <n>/<total>   LOW:  <n>/<total>
+     Pendentes: <liste o que ficou e por quê, ou "nenhum">
    ================================
    ```
 
